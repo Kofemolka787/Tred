@@ -117,7 +117,10 @@ function renderGoal() {
 function renderAccount() {
   const accounts = current.accounts || [];
   const fresh = a => !current.stale && a.live && Date.now()/1000-a.updated_at <= 15;
-  text("#account-status",accounts.some(fresh) ? "Данные поступают" : accounts.length ? "Нет свежего обновления" : "Нет связи");
+  const online = current.mode === "api" && !current.stale;
+  const linked = online && current.connection.authenticated;
+  const quotes = online && current.connection.live;
+  text("#account-status",current.stale ? "Сервер недоступен" : !online ? "Сервер не подключён" : accounts.some(fresh) ? "Баланс обновлён" : quotes ? "Котировки поступают" : accounts.length ? "Баланс сохранён" : linked ? "Модуль связан" : "Модуль не связан");
   $("#unlink-account").hidden = current.mode !== "api";
   text("#connect-backend",current.mode === "api" ? "Связь и код подключения" : "Подключить кабинет");
   const list = $("#account-list"); list.replaceChildren();
@@ -126,7 +129,7 @@ function renderAccount() {
     const label = document.createElement("span"), balance = document.createElement("strong"), detail = document.createElement("small");
     label.textContent = a.mode === "real" ? "Реальный счёт · USD" : a.mode === "demo" ? "Демосчёт · USD" : "Баланс Pocket Option";
     balance.textContent = usd(a.balance);
-    detail.textContent = a.id ? `ID ${a.id} · последнее обновление ${new Date(a.updated_at*1000).toLocaleTimeString()}` : "Счёт ещё не подключён";
+    detail.textContent = a.id ? `ID ${a.id} · последнее обновление ${new Date(a.updated_at*1000).toLocaleTimeString()}` : linked || quotes ? "Баланс и ID счёта ещё не получены от Pocket Option. Проверь статус счёта в расширении TRED." : "Подключи сервер и модуль Pocket Option.";
     card.append(label,balance,detail); list.append(card);
   });
   text("#analysis-caption",current.connection.live ? `Анализ · доступных пар ${current.catalog?.verified_count || 0}` : "Анализ: ждём подключение данных");

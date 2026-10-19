@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "TRED · связь с Pocket Option",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "Передаёт выбранные данные открытого Pocket Option в ваш TRED. Торговых команд нет.",
   "permissions": ["storage"],
   "host_permissions": ["https://*.trycloudflare.com/*"],

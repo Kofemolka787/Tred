@@ -19,7 +19,7 @@ socket.emit(new TextEncoder().encode(JSON.stringify([["EURUSD",Date.now()/1000,1
 socket.emit('42'+JSON.stringify(["updateStream",[["EURUSD",Date.now()/1000+7200,1.2]]]));
 socket.emit('42'+JSON.stringify(["loadHistoryPeriod",{asset:"EURUSD",period:60,data:[{time:Math.floor(Date.now()/60000)*60+7200,open:1.1,close:1.2,high:1.3,low:1.0}]}]));
 socket.emit('42["successcloseOrder",{"session":"fixture-secret-never-forward","uid":456}]'); // Incomplete result must be ignored.
-setImmediate(()=>{
+setImmediate(async()=>{
   const events=forwarded.flatMap(x=>x.events);
   assert.equal(sent.length,0,"Observer must never send an order or subscription");
   assert.equal(events.filter(x=>x.type==="account").length,2);
@@ -32,5 +32,29 @@ setImmediate(()=>{
   assert.equal(events.filter(x=>x.type==="trade").length,0);
   assert(!JSON.stringify(forwarded).includes("fixture-secret"));
   assert(events.every(x=>!Object.hasOwn(x,"session") && !Object.hasOwn(x,"password")));
-  console.log(JSON.stringify({ok:true,fixture_protocol:true,auth_fields_not_exported:true,no_outbound_commands:true,binary_quotes_decoded:true,incomplete_settlements_ignored:true,source_clock_tagged_without_timestamp_changes:true}));
+  forwarded=[];
+  const other=new sandbox.window.WebSocket("wss://api-eu.po.market/socket.io/?EIO=4&transport=websocket");
+  other.emit('42["successupdateBalance",{"balance":2,"isDemo":1}]');
+  other.emit('42["successauth",{"uid":789,"isDemo":1,"session":"fixture-secret-never-forward"}]');
+  other.emit('451-["successupdateBalance",{"_placeholder":true,"num":0}]');
+  other.emit(new Blob(['{"balance":"12.34","isDemo":1}']));
+  other.emit('{"uid":789,"balance":12.35,"isDemo":1,"currency":"USD"}');
+  other.emit('{"uid":999,"balance":44,"isDemo":1}');
+  other.emit('42["successupdateBalance",{"uid":999,"balance":45,"isDemo":0}]');
+  other.emit('42["successauth",{"uid":123,"currency":"USD","isDemo":1}]');
+  other.emit('42["successupdateBalance",{"balance":20}]');
+  socket.emit('42["successupdateBalance",{"balance":110,"isDemo":1}]');
+  await new Promise(setImmediate);
+  const accounts=forwarded.flatMap(x=>x.events).filter(x=>x.type==="account");
+  const at=balance=>accounts.find(x=>x.balance===balance);
+  assert.equal(accounts.length,7);
+  assert.equal(at('2').account_id,null,"No identity from a different socket");
+  assert.equal(at('12.34').account_id,"789");assert.equal(at('12.34').currency,null,"USD is not inferred");
+  assert.equal(at('12.35').currency,"USD","Explicit unframed broker balance is supported");
+  assert.equal(at('44').account_id,"999");assert.equal(at('44').currency,null,"Currency is reset on account change");
+  assert.equal(at('45').mode,"real");assert.equal(at('45').currency,null,"Currency is not inherited across modes");
+  assert.equal(at('20').mode,null,"Mode must be explicit on a balance event");
+  assert.equal(at('110').account_id,"456");assert.equal(at('110').currency,"USD");
+  assert(!JSON.stringify(forwarded).includes("fixture-secret"));assert.equal(sent.length,0);
+  console.log(JSON.stringify({ok:true,fixture_protocol:true,auth_fields_not_exported:true,no_outbound_commands:true,binary_quotes_decoded:true,incomplete_settlements_ignored:true,source_clock_tagged_without_timestamp_changes:true,account_identity_scoped_to_socket:true,split_metadata_and_unframed_balance:true,missing_currency_and_mode_not_guessed:true}));
 });

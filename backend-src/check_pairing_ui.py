@@ -43,7 +43,22 @@ with tempfile.TemporaryDirectory(prefix="tred-pairing-ui-") as temporary:
                     };
                     current=structuredClone(window.fixtureState);dataClient=window.oldClient;authorized=true;render();setBusy(false);
                 }""")
-                page.locator('[data-tab="profile"]').click();page.locator('#connect-backend').click()
+                page.locator('[data-tab="profile"]').click()
+                page.evaluate("current.connection.authenticated=true;current.connection.live=true;render()")
+                expect(page.locator('#account-status')).to_have_text('Котировки поступают')
+                expect(page.locator('#account-list')).to_contain_text('Баланс и ID счёта ещё не получены')
+                expect(page.locator('#account-list strong')).to_have_text('—')
+                page.evaluate("current.accounts=[{id:'456',mode:'real',balance:'120.25',updated_at:Date.now()/1000,live:true}];render()")
+                expect(page.locator('#account-status')).to_have_text('Баланс обновлён')
+                expect(page.locator('#account-list')).to_contain_text('Реальный счёт · USD')
+                expect(page.locator('#account-list')).to_contain_text('ID 456')
+                expect(page.locator('#account-list strong')).to_have_text('$120.25')
+                page.evaluate('current.stale=true;render()')
+                expect(page.locator('#account-status')).to_have_text('Сервер недоступен')
+                expect(page.locator('#account-list strong')).to_have_text('$120.25')
+                assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
+                page.evaluate('current=structuredClone(window.fixtureState);render()')
+                page.locator('#connect-backend').click()
                 page.wait_for_function('window.oldCalls===1')
                 page.locator('#backend-url').fill('https://new-fixture.trycloudflare.com')
                 page.locator('#backend-form button').click()
@@ -66,7 +81,7 @@ with tempfile.TemporaryDirectory(prefix="tred-pairing-ui-") as temporary:
                 assert page.locator('#pair-code').inner_text()==''
                 assert page.locator('#copy-code').is_disabled()
                 assert not errors,errors
-                result={'old_pair_reply_cannot_overwrite_new_code':True,'pending_pair_requests_serialized':True,'code_displays_exact_server':True,'reopen_reuses_valid_code':True,'explicit_renew_rotates_code':True,'failed_new_connection_clears_old_code':True,'no_mobile_overflow':True,'page_errors':len(errors)}
+                result={'live_quotes_without_balance_not_disconnected':True,'account_balance_and_pocket_id_rendered':True,'offline_last_balance_not_claimed_fresh':True,'old_pair_reply_cannot_overwrite_new_code':True,'pending_pair_requests_serialized':True,'code_displays_exact_server':True,'reopen_reuses_valid_code':True,'explicit_renew_rotates_code':True,'failed_new_connection_clears_old_code':True,'no_mobile_overflow':True,'page_errors':len(errors)}
                 (ROOT/'artifacts/pairing-ui-check.json').write_text(json.dumps(result,indent=2)+'\n')
                 print(json.dumps(result))
             finally:browser.close()

@@ -1,12 +1,12 @@
 "use strict";
 const $=s=>document.querySelector(s);
-let editing=false,hydrated=false,pairing=false,changingClock=false,marketClock="utc";
-const UI_VERSION="0.3.3";
+let editing=false,hydrated=false,pairing=false,changingClock=false,marketClock="utc",accountTarget=null,confirmingCurrency=false;
+const UI_VERSION="0.3.4";
 const labels={account:"баланс",asset:"каталог пар",quote:"котировки",candle:"свечи",trade:"сделки"};
 function outdated(){
   $("#connection").textContent="Окно обновилось, а фоновый модуль ещё работает в другой версии. Нажми «Перезапустить модуль», затем открой TRED снова.";
   $("#connection").className="";$("#reload-module").hidden=false;
-  for(const id of ["#form","#change","#disconnect","#diagnostic","#market-time"])$(id).hidden=true;
+  for(const id of ["#form","#change","#disconnect","#diagnostic","#market-time","#account-currency"])$(id).hidden=true;
   $("#status").textContent="Настройки связи не удалены.";$("#received").textContent="";
 }
 async function status(){
@@ -29,7 +29,27 @@ async function status(){
   marketClock=s.marketClock==="po-utc2"?"po-utc2":"utc";
   $("#clock-status").textContent=marketClock==="po-utc2"?"Время котировок и свечей: Pocket Option UTC+2 → UTC. Проверка свежести включена.":"Время котировок и свечей: UTC, без пересчёта.";
   $("#clock-toggle").textContent=marketClock==="po-utc2"?"Вернуть формат UTC":"Использовать Pocket Option UTC+2";
+  accountTarget=s.accountCandidate;
+  const canConfirm=accountTarget&&/^\d{1,20}$/.test(accountTarget.account_id)&&["real","demo"].includes(accountTarget.mode)&&accountTarget.reported_currency===null;
+  $("#account-currency").hidden=!paired||!canConfirm;
+  $("#account-identity").textContent=canConfirm?`Pocket ID ${accountTarget.account_id} · ${accountTarget.mode==="demo"?"демосчёт":"реальный счёт"}`:"";
+  $("#currency-status").textContent=s.usdConfirmed?"USD подтверждён тобой для этого счёта и режима.":"Брокер не указал валюту в сообщении баланса.";
+  $("#confirm-usd").hidden=!!s.usdConfirmed;
+  $("#forget-usd").hidden=!s.usdConfirmed;
 }
+async function currencyAction(action){
+  if(confirmingCurrency||!accountTarget)return;
+  confirmingCurrency=true;const target={...accountTarget};
+  $("#confirm-usd").disabled=true;$("#forget-usd").disabled=true;$("#currency-error").textContent="";
+  try{
+    const result=await chrome.runtime.sendMessage({action,account_id:target.account_id,mode:target.mode});
+    if(result.error)$("#currency-error").textContent=result.error;
+    else{await status();$("#currency-error").textContent=action==="confirm-usd"?"Теперь обнови вкладку Pocket Option с графиком.":"Подтверждение отменено.";}
+  }catch(_){outdated();}
+  finally{confirmingCurrency=false;$("#confirm-usd").disabled=false;$("#forget-usd").disabled=false;}
+}
+$("#confirm-usd").addEventListener("click",()=>currencyAction("confirm-usd"));
+$("#forget-usd").addEventListener("click",()=>currencyAction("forget-usd"));
 $("#clock-toggle").addEventListener("click",async()=>{
   if(changingClock)return;changingClock=true;$("#clock-toggle").disabled=true;$("#clock-error").textContent="";
   try{

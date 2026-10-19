@@ -6,18 +6,25 @@
   const safeSymbol = v => typeof v === "string" && /^[A-Za-z0-9][A-Za-z0-9_./ #-]{1,31}$/.test(v);
   const ts = v => number(v) ? (v > 1e11 ? v / 1000 : v) : null;
   const emit = events => { if (events.length) window.postMessage({source:"tred-observer-v1", events:events.slice(0,250)}, location.origin); };
-  let account = null;
-  let supported = 0;
-  function normalize(name, data) {
+  const accountId = value => (typeof value === "string" || typeof value === "number" && Number.isSafeInteger(value)) && /^\d{1,20}$/.test(String(value)) ? String(value) : null;
+  const currency = value => value == null ? null : typeof value === "string" && /^[A-Za-z]{3}$/.test(value) ? value.toUpperCase() : "unsupported";
+  function normalize(name, data, state) {
     const now = Date.now()/1000;
     const events = [];
     if (data && !Array.isArray(data) && (name === "successauth" || name === "successupdateBalance" || name === "balance")) {
-      // Never assume demo/real or USD when the message does not specify it.
-      if (/^\d{1,20}$/.test(String(data.uid)) && [0,1].includes(data.isDemo) && data.currency === "USD") {
-        account = {account_id:String(data.uid), mode:data.isDemo === 1 ? "demo" : "real", currency:"USD"};
+      // Identity/currency belong to this socket, never another account's socket.
+      // A missing mode or currency is forwarded as missing, never guessed.
+      if (name === "successauth" || Object.hasOwn(data,"uid")) {
+        const uid = accountId(data.uid);
+        if (name === "successauth" || uid !== state.uid) { state.currencies = {}; state.account = null; }
+        state.uid = uid;
       }
-      if (account && number(data.balance) && [0,1].includes(data.isDemo) && (data.isDemo === 1 ? "demo" : "real") === account.mode) {
-        events.push({type:"account", ...account, balance:String(data.balance), time:now});
+      const mode = [0,1,false,true].includes(data.isDemo) ? data.isDemo === 1 || data.isDemo === true ? "demo" : "real" : null;
+      if (state.uid && mode && Object.hasOwn(data,"currency")) state.currencies[mode] = currency(data.currency);
+      const unit = Object.hasOwn(data,"currency") ? currency(data.currency) : state.uid && mode ? state.currencies[mode] ?? null : null;
+      state.account = state.uid && mode ? {account_id:state.uid,mode,currency:unit} : null;
+      if (number(data.balance) || typeof data.balance === "string" && /^\d{1,8}(\.\d{1,2})?$/.test(data.balance)) {
+        events.push({type:"account",account_id:state.uid,mode,currency:unit,balance:String(data.balance),time:now});
       }
     }
     if (Array.isArray(data) && (name === "updateAssets" || name === "assets")) {
@@ -41,6 +48,7 @@
     }
     // This strict variant accepts only explicit complete trade records. Unknown
     // broker variants remain unsupported until compared with the actual terminal.
+    const account = state.account;
     if (["successopenOrder","successcloseOrder","updateOpenedDeals","updateClosedDeals"].includes(name) && account) {
       const rows = Array.isArray(data) ? data : data?.deals || [data];
       for (const r of rows) {
@@ -50,7 +58,6 @@
         events.push({type:"trade",mode:account.mode,account_id:account.account_id,id:String(r.id),symbol:r.asset,direction:r.action === "call" ? "up" : "down",stake:String(r.amount),opened_at:ts(r.openTime),expires_at:ts(r.closeTime),status:closed ? r.profit > 0 ? "win" : r.profit < 0 ? "loss" : "draw" : "open",...(closed ? {closed_at:ts(r.closedAt),pnl:String(r.profit)} : {}),time:now});
       }
     }
-    if (events.length) supported += events.length;
     emit(events);
   }
   class ObservedSocket extends Native {
@@ -59,6 +66,7 @@
       let host;
       try { host = new URL(args[0]).hostname; } catch (_) { return; }
       if (!(host === "po.market" || host.endsWith(".po.market"))) return;
+      const state = {uid:null,currencies:{},account:null};
       let pending = null;
       let queue = Promise.resolve();
       this.addEventListener("message", event => {
@@ -71,17 +79,20 @@
             if (pending) {
               const binary = JSON.parse(frame);
               const name = pending; pending = null;
-              normalize(name,binary);
+              normalize(name,binary,state);
             } else if (frame.startsWith("451-")) {
               const parsed = JSON.parse(frame.slice(4));
-              const allowed = ["successauth","successupdateBalance","updateAssets","assets","updateStream","loadHistoryPeriod","updateHistoryNew","candles","successopenOrder","successcloseOrder","updateOpenedDeals","updateClosedDeals"];
+              const allowed = ["successauth","successupdateBalance","balance","updateAssets","assets","updateStream","loadHistoryPeriod","updateHistoryNew","candles","successopenOrder","successcloseOrder","updateOpenedDeals","updateClosedDeals"];
               pending = allowed.includes(parsed[0]) ? parsed[0] : "unsupported";
             } else if (frame.startsWith("42")) {
               const parsed = JSON.parse(frame.slice(2));
-              normalize(parsed[0],parsed[1]);
+              normalize(parsed[0],parsed[1],state);
+            } else if (frame.startsWith("{")) {
+              const parsed = JSON.parse(frame);
+              if (parsed && Object.hasOwn(parsed,"balance")) normalize("balance",parsed,state);
             } else if (frame.startsWith("[")) {
               const parsed = JSON.parse(frame);
-              if (Array.isArray(parsed) && Array.isArray(parsed[0])) normalize("assets",parsed);
+              if (Array.isArray(parsed) && Array.isArray(parsed[0])) normalize("assets",parsed,state);
             }
           } catch (_) { pending = null; }
         }).catch(() => { pending = null; });

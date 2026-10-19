@@ -1,6 +1,6 @@
 "use strict";
-importScripts("time-check.js");
-const WORKER_VERSION="0.3.3";
+importScripts("time-check.js","account-check.js");
+const WORKER_VERSION="0.3.4";
 const endpoint=value=>{
   const u=new URL(value);
   if(u.protocol!=="https:"||!/^[a-z0-9-]+\.trycloudflare\.com$/.test(u.hostname)||u.port||u.username||u.password||u.search||u.hash||u.pathname!=="/")throw new Error("Укажи HTTPS-адрес своего TRED-туннеля.");
@@ -26,7 +26,7 @@ async function flush(){
   sending=true;
   const epoch=generation;
   try{
-    const stored=await chrome.storage.local.get(["base","token","needsPairing","timeWarnings","receivedKinds","marketClock","clockSamples"]);
+    const stored=await chrome.storage.local.get(["base","token","needsPairing","timeWarnings","receivedKinds","marketClock","clockSamples","accountCandidate","confirmedUsdAccounts"]);
     const {base,token}=stored;
     if(!base||!token||stored.needsPairing){queue=[];return;}
     const batch=queue.splice(0,250),groups=new Map();
@@ -38,6 +38,7 @@ async function flush(){
     const warnings=Object.fromEntries(Object.entries(stored.timeWarnings||{}).filter(([kind,value])=>TredTime.kinds.includes(kind)&&typeof value==="string"));
     const received=new Set((stored.receivedKinds||[]).filter(x=>TredTime.kinds.includes(x)));
     const clockSamples={...stored.clockSamples};
+    let accountCandidate=stored.accountCandidate||null;
     let lastError="",lastSeen=null,needsPairing=false;
     for(const kind of [...TredTime.kinds,"unknown"]){
       const rows=groups.get(kind);
@@ -49,6 +50,12 @@ async function flush(){
         const decoded=TredTime.decode(event,stored.marketClock),now=Date.now()/1000;
         const error=decoded.error?{message:decoded.error}:TredTime.problem(decoded.event,now);
         if(error){rejected.push(error);continue;}
+        if(kind==="account"){
+          const checked=TredAccount.inspect(decoded.event,stored.confirmedUsdAccounts);
+          accountCandidate=checked.candidate;
+          if(checked.error){rejected.push({message:checked.error});continue;}
+          decoded.event=checked.event;
+        }
         // The terminal includes the current, unfinished candle in its history.
         // Never send it to research, including after UTC+2 source decoding.
         if(kind==="candle"&&[60,300,900].includes(decoded.event.period)&&decoded.event.time+decoded.event.period>now)continue;
@@ -69,7 +76,7 @@ async function flush(){
         if(lastError==="Некорректное время данных."||lastError==="Получены устаревшие данные.")warnings[kind]=TredTime.rejectedByServer(kind,accepted,Date.now()/1000);
       }
     }
-    if(epoch===generation)await chrome.storage.local.set({lastError,needsPairing,timeWarnings:warnings,receivedKinds:[...received],clockSamples,...(lastSeen===null?{}:{lastSeen})});
+    if(epoch===generation)await chrome.storage.local.set({lastError,needsPairing,timeWarnings:warnings,receivedKinds:[...received],clockSamples,accountCandidate,...(lastSeen===null?{}:{lastSeen})});
   }catch(error){
     if(epoch===generation)await chrome.storage.local.set({lastError:error.message.slice(0,200)});
   }finally{sending=false;if(queue.length)schedule();}
@@ -82,7 +89,20 @@ chrome.runtime.onMessage.addListener((message,sender,reply)=>{
       if(typeof result.token!=="string"||!/^[A-Za-z0-9_-]{32,100}$/.test(result.token))throw new Error("Сервер не подтвердил связь. Прежние настройки сохранены.");
       // A rejected claim preserves the previously stored binding.
       generation++;queue=[];
-      await chrome.storage.local.set({base,token:result.token,lastError:"",lastSeen:null,needsPairing:false,timeWarnings:{},receivedKinds:[],clockSamples:{}});
+      await chrome.storage.local.set({base,token:result.token,lastError:"",lastSeen:null,needsPairing:false,timeWarnings:{},receivedKinds:[],clockSamples:{},accountCandidate:null,confirmedUsdAccounts:[]});
+      return {ok:true};
+    }
+    if(["confirm-usd","forget-usd"].includes(message.action)&&!sender.tab){
+      const stored=await chrome.storage.local.get(["base","token","needsPairing","accountCandidate","confirmedUsdAccounts","timeWarnings","receivedKinds"]);
+      const candidate=stored.accountCandidate;
+      if(!stored.base||!stored.token||stored.needsPairing)throw new Error("Сначала свяжи кабинет.");
+      if(!candidate||!TredAccount.id(candidate.account_id)||!TredAccount.mode(candidate.mode)||candidate.account_id!==message.account_id||candidate.mode!==message.mode)throw new Error("Счёт изменился. Проверь его в окне модуля и повтори подтверждение.");
+      if(message.action==="confirm-usd"&&(candidate.reported_currency!==null||typeof candidate.seen_at!=="number"||!Number.isFinite(candidate.seen_at)||Date.now()/1000-candidate.seen_at>300||candidate.seen_at>Date.now()/1000+5))throw new Error("Для подтверждения обнови Pocket Option. Валюта не может заменять указанную брокером.");
+      generation++;queue=[];
+      const values=TredAccount.confirmations(stored.confirmedUsdAccounts).filter(value=>value!==TredAccount.key(candidate));
+      if(message.action==="confirm-usd")values.push(TredAccount.key(candidate));
+      const timeWarnings=Object.fromEntries(Object.entries(stored.timeWarnings||{}).filter(([kind])=>kind!=="account"));
+      await chrome.storage.local.set({confirmedUsdAccounts:values.slice(-20),timeWarnings,receivedKinds:(stored.receivedKinds||[]).filter(kind=>kind!=="account")});
       return {ok:true};
     }
     if(message.action==="market-clock"&&!sender.tab){
@@ -95,9 +115,9 @@ chrome.runtime.onMessage.addListener((message,sender,reply)=>{
     }
     if(message.action==="disconnect"&&!sender.tab){generation++;queue=[];await chrome.storage.local.clear();return {ok:true};}
     if(message.action==="status"&&!sender.tab){
-      const {base,token,lastError,lastSeen,needsPairing,timeWarnings,receivedKinds,marketClock,clockSamples}=await chrome.storage.local.get(["base","token","lastError","lastSeen","needsPairing","timeWarnings","receivedKinds","marketClock","clockSamples"]);
+      const {base,token,lastError,lastSeen,needsPairing,timeWarnings,receivedKinds,marketClock,clockSamples,accountCandidate,confirmedUsdAccounts}=await chrome.storage.local.get(["base","token","lastError","lastSeen","needsPairing","timeWarnings","receivedKinds","marketClock","clockSamples","accountCandidate","confirmedUsdAccounts"]);
       const diagnostic=Object.entries(timeWarnings||{}).filter(([kind,value])=>TredTime.kinds.includes(kind)&&typeof value==="string").map(([,value])=>value).join("\n");
-      return {worker_version:WORKER_VERSION,base,paired:!!(base&&token),needsPairing:!!needsPairing,lastError,lastSeen,diagnostic,receivedKinds:(receivedKinds||[]).filter(x=>TredTime.kinds.includes(x)),marketClock:TredTime.profile(marketClock),clockSamples:clockSamples||{}};
+      return {worker_version:WORKER_VERSION,base,paired:!!(base&&token),needsPairing:!!needsPairing,lastError,lastSeen,diagnostic,receivedKinds:(receivedKinds||[]).filter(x=>TredTime.kinds.includes(x)),marketClock:TredTime.profile(marketClock),clockSamples:clockSamples||{},accountCandidate:accountCandidate||null,usdConfirmed:!!(accountCandidate&&TredAccount.confirmations(confirmedUsdAccounts).includes(TredAccount.key(accountCandidate)))};
     }
     if(message.action==="events"&&sender.tab&&/^https:\/\/([a-z0-9-]+\.)*pocketoption\.com\//.test(sender.url||"")&&Array.isArray(message.events)){
       queue.push(...message.events.slice(0,250));queue=queue.slice(-1000);schedule();return {ok:true};

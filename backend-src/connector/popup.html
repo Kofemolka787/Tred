@@ -15,6 +15,14 @@
 <button id="change" type="button" hidden>Изменить подключение</button>
 <p id="status" role="status"></p><p id="received"></p>
 <pre id="diagnostic" hidden></pre>
+<section id="account-currency" hidden>
+  <p id="account-identity"></p>
+  <p id="currency-status" role="status"></p>
+  <button id="confirm-usd" type="button">Мой счёт в USD — подтвердить</button>
+  <button id="forget-usd" type="button" hidden>Отменить подтверждение USD</button>
+  <small>Подтверждай только валюту, которую видишь на своём счёте Pocket Option. После подтверждения обнови вкладку с графиком, чтобы получить новый баланс.</small>
+  <p id="currency-error" role="alert"></p>
+</section>
 <section id="market-time" hidden>
   <p id="clock-status" role="status"></p>
   <button id="clock-toggle" type="button">Использовать Pocket Option UTC+2</button>
@@ -22,7 +30,7 @@
   <p id="clock-error" role="alert"></p>
 </section>
 <button id="disconnect" type="button" hidden>Отключить модуль</button>
-<small id="module-version">Модуль 0.3.3</small>
+<small id="module-version">Модуль 0.3.4</small>
 <small>После обновления модуля обнови вкладку Pocket Option. Держи компьютер, сервер и график открытыми. Если Windows показывает неверное время, используй «Синхронизировать сейчас» в настройках часов.</small>
 <script src="popup.js"></script>
 </html>

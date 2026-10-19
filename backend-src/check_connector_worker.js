@@ -16,7 +16,7 @@ function harness(fetcher,initial={}){
     fetch:async(url,options)=>{requests.push({url,options,body:JSON.parse(options.body)});return fetcher?fetcher(url,options):response(200,{ok:true});}
   };
   vm.createContext(context);
-  context.importScripts=name=>vm.runInContext(fs.readFileSync("connector/"+name,"utf8"),context);
+  context.importScripts=(...names)=>names.forEach(name=>vm.runInContext(fs.readFileSync("connector/"+name,"utf8"),context));
   vm.runInContext(fs.readFileSync("connector/worker.js","utf8"),context);
   return {storage,requests,context,message:(message,from={})=>new Promise(resolve=>listener(message,from,resolve)),
     async events(events){await this.message({action:"events",events},sender);await vm.runInContext("flush()",context);}};
@@ -29,7 +29,7 @@ async function checks(){
   assert.equal(h.requests[2].body.events[0].time,now,"No timestamp rewriting");
   let status=await h.message({action:"status"});
   assert(status.paired&&!status.needsPairing&&status.lastSeen);
-  assert.equal(status.worker_version,"0.3.3");
+  assert.equal(status.worker_version,"0.3.4");
   assert.match(status.diagnostic,/quote|Котировка/);assert.match(status.diagnostic,/30 с/);
   assert(!JSON.stringify(status).includes(token));
   assert(!JSON.stringify(h.storage).includes('"balance"'));
@@ -115,24 +115,58 @@ async function checks(){
   await clock.message({action:"market-clock",profile:"utc"});await clock.events([native,quote]);
   assert.equal(clock.requests.at(-1).body.events[0].time,now,"Reverting to UTC is supported");
   assert.equal(clock.storage.clockSamples.quote.offset_seconds,0);
-  console.log(JSON.stringify({ok:true,worker_scenarios:17,utc_timestamps_unchanged:true,bad_quote_does_not_block_account:true,failed_claim_preserves_binding:true,status_excludes_token:true,unknown_credential_fields_not_sent:true,late_response_after_disconnect_ignored:true,html_and_missing_token_keep_binding:true,explicit_po_utc2_profile:true,stale_and_future_still_rejected:true,closed_candles_decoded_before_filter:true,source_time_provenance_retained:true,no_arrival_time_calibration:true}));
+
+  const currency=harness(),missingCurrency={...account,currency:null};
+  await currency.events([missingCurrency,quote]);
+  assert.equal(currency.requests.length,1,"Missing currency does not block unrelated quotes");
+  let candidate=(await currency.message({action:"status"})).accountCandidate;
+  assert.equal(candidate.account_id,"456");assert(!Object.hasOwn(candidate,"balance"));
+  const confirmation={action:"confirm-usd",account_id:candidate.account_id,mode:candidate.mode};
+  assert((await currency.message(confirmation,sender)).error,"Page cannot confirm USD");
+  assert((await currency.message({...confirmation,account_id:"789"})).error);
+  assert((await currency.message({...confirmation,mode:"real"})).error);
+  assert((await currency.message(confirmation)).ok);
+  assert.equal(currency.requests.length,1,"Confirmation never replays a cached balance");
+  assert.equal(currency.storage.token,token);
+  await currency.events([missingCurrency]);
+  assert.equal(currency.requests.length,2);assert.equal(currency.requests[1].body.events[0].currency,"USD");
+  assert((await currency.message({action:"status"})).usdConfirmed);
+  await currency.events([{...missingCurrency,account_id:"789"},{...missingCurrency,mode:"real"}]);
+  assert.equal(currency.requests.length,2,"Confirmation is scoped to account AND demo/real mode");
+  await currency.events([{...missingCurrency,currency:"EUR"}]);
+  assert.equal(currency.requests.length,2,"Explicit other currencies cannot be overridden");
+  assert((await currency.message(confirmation)).error);
+  await currency.events([{...missingCurrency,account_id:null},{...missingCurrency,mode:null}]);
+  assert.equal(currency.requests.length,2);assert.equal(currency.storage.accountCandidate,null);
+  await currency.events([missingCurrency]);
+  assert((await currency.message({...confirmation,action:"forget-usd"})).ok);
+  const afterForget=currency.requests.length;await currency.events([missingCurrency]);
+  assert.equal(currency.requests.length,afterForget);
+  const stale=harness(null,{accountCandidate:{account_id:"456",mode:"demo",reported_currency:null,seen_at:now-301}});
+  assert((await stale.message(confirmation)).error,"Expired account metadata requires a chart reload");
+  const rebind=harness(()=>response(200,{token:token+"new"}),{confirmedUsdAccounts:["456:demo"],accountCandidate:copy(candidate)});
+  assert((await rebind.message({action:"pair",base,code:"fixture"})).ok);
+  assert.deepEqual(copy(rebind.storage.confirmedUsdAccounts),[]);assert.equal(rebind.storage.accountCandidate,null);
+  console.log(JSON.stringify({ok:true,worker_scenarios:24,utc_timestamps_unchanged:true,bad_quote_does_not_block_account:true,failed_claim_preserves_binding:true,status_excludes_token:true,unknown_credential_fields_not_sent:true,late_response_after_disconnect_ignored:true,html_and_missing_token_keep_binding:true,explicit_po_utc2_profile:true,stale_and_future_still_rejected:true,closed_candles_decoded_before_filter:true,source_time_provenance_retained:true,no_arrival_time_calibration:true,usd_requires_confirmation_when_missing:true,confirmation_scoped_to_account_and_mode:true,explicit_other_currency_cannot_be_overridden:true,confirmation_never_replays_old_balance:true}));
 }
 async function realHttp(){
   const api=process.argv[process.argv.indexOf("--api")+1],fixtureToken=process.argv[process.argv.indexOf("--fixture-token")+1];
   assert(/^http:\/\/127\.0\.0\.1:\d+$/.test(api));
   const h=harness((url,options)=>fetch(url.replace(base,api),options),{token:fixtureToken});
-  await h.events([account,asset,quote,{...quote,time:now+30}]);
+  const missingCurrency={...account,currency:null};
+  await h.events([missingCurrency,asset,quote,{...quote,time:now+30}]);
   const s=await h.message({action:"status"});
   assert.equal(s.lastError,"");assert(s.paired&&s.lastSeen);
-  assert.deepEqual(copy(s.receivedKinds),["account","asset","quote"]);
+  assert.deepEqual(copy(s.receivedKinds),["asset","quote"]);
   assert.match(s.diagnostic,/30 с/);
   assert((await h.message({action:"market-clock",profile:"po-utc2"})).ok);
+  assert((await h.message({action:"confirm-usd",account_id:"456",mode:"demo"})).ok);
   const native={...quote,time:now+7200,source_clock:"po-market-native-v1"};
   const candle={type:"candle",symbol:"EURUSD",period:60,time:Math.floor(now/60)*60-60+7200,open:1.1,close:1.2,high:1.3,low:1.0,source_clock:"po-market-native-v1"};
-  await h.events([native,{...native,time:now+7200+30},{...native,time:now+7200-61},candle,{...candle,time:candle.time+60}]);
+  await h.events([missingCurrency,native,{...native,time:now+7200+30},{...native,time:now+7200-61},candle,{...candle,time:candle.time+60}]);
   const decoded=await h.message({action:"status"});
-  assert.equal(decoded.lastError,"");assert(decoded.receivedKinds.includes("quote")&&decoded.receivedKinds.includes("candle"));
+  assert.equal(decoded.lastError,"");assert(decoded.receivedKinds.includes("account")&&decoded.receivedKinds.includes("quote")&&decoded.receivedKinds.includes("candle"));
   assert.equal(h.requests.at(-2).body.events.length,1);assert.equal(h.requests.at(-1).body.events.length,1);
-  console.log(JSON.stringify({ok:true,actual_backend_http:true,good_types_accepted:4,bad_future_quote_not_sent:true,po_utc2_quote_and_closed_candle_accepted:true,stale_native_quote_not_sent:true}));
+  console.log(JSON.stringify({ok:true,actual_backend_http:true,good_types_accepted:4,bad_future_quote_not_sent:true,po_utc2_quote_and_closed_candle_accepted:true,stale_native_quote_not_sent:true,missing_currency_held_until_scoped_confirmation:true}));
 }
 (process.argv.includes("--api")?realHttp():checks()).catch(error=>{console.error(error);process.exitCode=1;});
