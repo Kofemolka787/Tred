@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#08080f">
+  <title>TRED · демосигналы</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="./styles.css">
+  <script src="https://telegram.org/js/telegram-web-app.js" defer></script>
+  <script src="./data-client.js" defer></script>
+  <script src="./app.js" defer></script>
+</head>
+<body>
+  <svg class="sprite" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+    <symbol id="i-trend" viewBox="0 0 24 24"><path d="m3 17 6-6 4 4 8-10M15 5h6v6"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l4 2"/></symbol>
+    <symbol id="i-cup" viewBox="0 0 24 24"><path d="M8 3h8v5a4 4 0 0 1-8 0V3ZM8 5H4v2a4 4 0 0 0 4 4m8-6h4v2a4 4 0 0 1-4 4M12 12v6m-4 3h8m-6-3h4v3"/></symbol>
+    <symbol id="i-user" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="4"/><path d="M3 10h18"/></symbol>
+    <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><ellipse cx="12" cy="12" rx="4" ry="9"/><path d="M3 12h18"/></symbol>
+    <symbol id="i-target" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="4"/><path d="M12 1v5m0 12v5M1 12h5m12 0h5"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+    <symbol id="i-book" viewBox="0 0 24 24"><path d="M12 5c-3-3-8-2-9-1v15c2-2 6-2 9 0m0-14c3-3 8-2 9-1v15c-2-2-6-2-9 0V5Z"/></symbol>
+    <symbol id="i-bolt" viewBox="0 0 24 24"><path d="m13 2-9 12h7l-1 8 10-13h-8l1-7Z"/></symbol>
+  </svg>
+  <div class="ambient" aria-hidden="true"></div>
+  <main class="app">
+    <header class="brand-row">
+      <div class="brand"><div class="brand-mark" aria-hidden="true">T<span></span></div><div><h1>TRED</h1><p>сигналы по валютным парам</p></div></div>
+      <div class="feed-badge" id="feed-badge"><i></i><span>Нет котировок</span></div>
+    </header>
+    <div class="notice" id="notice" role="status" hidden></div>
+
+    <section class="panel" data-panel="signal">
+      <div class="market-switch" aria-label="Рынок">
+        <button class="settings-control" data-market="normal"><svg><use href="#i-globe"/></svg>Обычный рынок</button>
+        <button class="settings-control active" data-market="otc"><span class="purple-orb"></span>OTC</button>
+      </div>
+      <div class="mode-switch">
+        <div class="mode-label"><svg><use href="#i-target"/></svg><span>SMC</span></div>
+        <button class="settings-control active" data-mode="standard"><span class="purple-orb"></span><span>Стандарт</span></button>
+        <button class="settings-control" data-mode="long"><svg><use href="#i-trend"/></svg><span>Долгосрок</span></button>
+        <button class="unavailable-mode" disabled title="Минимальная экспирация — 3 минуты"><svg><use href="#i-bolt"/></svg><span>Короткий</span></button>
+      </div>
+      <p class="mode-caption" id="mode-caption">OTC · экспирация от 3 минут</p>
+
+      <button class="auto-card selected settings-control" id="auto-card" aria-pressed="true">
+        <span class="target-orbit"><span class="target-center"><svg><use href="#i-target"/></svg></span></span>
+        <span class="auto-copy"><strong>Подобрать пару<br>для входа</strong><span class="auto-subtitle">Найдём подходящие условия</span><span class="data-chip" id="data-chip"><i></i>Ожидаем котировки</span></span>
+        <span class="selection-check"><svg><use href="#i-check"/></svg></span>
+      </button>
+      <button class="manual-link settings-control" id="choose-pair"><span id="pair-label">или выбрать пару самому</span><svg><use href="#i-chevron"/></svg></button>
+
+      <div class="connection-note"><span class="status-dot"></span><p id="connection-reason">Авторизация котировок пока не подтверждена.</p></div>
+
+      <div class="signal-controls">
+        <div class="expiry-switch" id="expiry-switch" aria-label="Экспирация"></div>
+        <button class="signal-button settings-control" id="request-signal"><strong>ПОЛУЧИТЬ СИГНАЛ</strong><span id="signal-subtitle">Автоподбор · 5 минут</span><span class="button-shine" aria-hidden="true"></span></button>
+        <p class="demo-caption"><span></span>Деморежим · вход открываешь сам</p>
+      </div>
+    </section>
+
+    <section class="panel" data-panel="trades" hidden>
+      <p class="eyebrow">МОИ СИГНАЛЫ</p>
+      <div class="stat-tiles">
+        <div class="stat-tile"><strong id="trade-count">0</strong><span>сигналов</span></div>
+        <div class="stat-tile"><strong><b class="positive" id="wins">0</b><em>/</em><b class="negative" id="losses">0</b></strong><span>плюс / минус</span></div>
+        <div class="stat-tile"><strong id="trade-rate">—</strong><span>проходимость</span></div>
+      </div>
+      <div class="empty-card"><svg><use href="#i-clock"/></svg><h2>Здесь будут твои сигналы</h2><p>Сохраним входы и результаты, когда анализ начнёт работать на проверенных данных.</p></div>
+      <div class="requests-section" id="requests-section" hidden><p class="eyebrow">ЗАПРОСЫ АНАЛИЗА</p><div id="request-list"></div></div>
+      <p class="quiet-text">Пропуск входа не считается выигрышем или проигрышем.</p>
+    </section>
+
+    <section class="panel" data-panel="stats" hidden>
+      <p class="eyebrow">РЕЗУЛЬТАТЫ ПРОВЕРКИ</p>
+      <div class="insight-card"><span class="mini-label">ПРОХОДИМОСТЬ НА ДЕМО</span><strong id="stats-rate">—</strong><p id="stats-sample">Пока нет завершённых сигналов</p></div>
+      <div class="metric-row"><span>Сигналов выдано</span><strong id="stats-signals">0</strong></div>
+      <div class="metric-row"><span>Цель исследования</span><strong>от 60%</strong></div>
+      <div class="metric-row"><span>Модель</span><strong class="amber">Не проверена</strong></div>
+      <div class="metric-row"><span>Рыночные данные</span><strong id="stats-data" class="amber">Нет потока</strong></div>
+      <div class="info-card"><svg><use href="#i-target"/></svg><p>60% — цель проверки, а не обещанный результат. Проходимость появится после проверки сигналов на новых данных и демосчёте.</p></div>
+    </section>
+
+    <section class="panel" data-panel="profile" hidden>
+      <button class="guide-link" id="open-guide"><svg><use href="#i-book"/></svg><strong>Как работает TRED</strong><span>коротко о главном</span><svg class="chevron"><use href="#i-chevron"/></svg></button>
+      <div class="profile-card"><div class="profile-card-top"><span>TRED DEMO</span><div class="small-brand">T</div></div><p class="profile-id-label">TELEGRAM ID</p><strong class="profile-id" id="profile-id">—</strong><div class="profile-card-bottom"><div><span>Владелец</span><strong id="profile-name">Личный кабинет</strong></div><div><span>Котировки</span><strong class="amber" id="profile-feed">не подключены</strong></div></div></div>
+      <p class="eyebrow">ТВОЙ ДОСТУП</p>
+      <div class="access-card"><div><strong>Личный доступ</strong><span>Для тебя и приглашённого друга</span></div><span class="access-check"><svg><use href="#i-check"/></svg></span></div>
+      <button class="pocket-link" id="open-pocket">Открыть демосчёт Pocket Option<svg><use href="#i-chevron"/></svg></button>
+      <p class="quiet-text" id="storage-note">В TRED нет подписок, покупок или привязки платёжной карты.</p>
+    </section>
+
+    <nav class="bottom-nav" aria-label="Разделы приложения">
+      <button class="active" data-tab="signal" aria-current="page"><svg><use href="#i-trend"/></svg><span>Сигнал</span></button>
+      <button data-tab="trades"><svg><use href="#i-clock"/></svg><span>Сигналы</span></button>
+      <button data-tab="stats"><svg><use href="#i-cup"/></svg><span>Результаты</span></button>
+      <button data-tab="profile"><svg><use href="#i-user"/></svg><span>Кабинет</span></button>
+    </nav>
+  </main>
+
+  <dialog class="sheet" id="pair-dialog">
+    <div class="sheet-heading"><h2>Выбрать пару</h2><button class="icon-button" data-close="pair-dialog" aria-label="Закрыть"><svg><use href="#i-close"/></svg></button></div>
+    <p>Укажи название с графика Pocket Option. Наличие котировок проверяется отдельно.</p>
+    <form id="pair-form"><label for="pair-input">Валютная пара</label><input id="pair-input" name="symbol" placeholder="EUR/USD" maxlength="32" autocomplete="off" spellcheck="false" required><div class="pair-suggestions"><button type="button" data-symbol="EUR/USD">EUR/USD</button><button type="button" data-symbol="GBP/USD">GBP/USD</button><button type="button" data-symbol="USD/JPY">USD/JPY</button><button type="button" data-symbol="AUD/CAD">AUD/CAD</button></div><button class="primary-small" type="submit">Выбрать</button></form>
+  </dialog>
+  <dialog class="sheet" id="guide-dialog"><div class="sheet-heading"><h2>Как работает TRED</h2><button class="icon-button" data-close="guide-dialog" aria-label="Закрыть"><svg><use href="#i-close"/></svg></button></div><ol class="guide-list"><li><strong>Выбираешь условия</strong><span>Обычный рынок или OTC, пару и экспирацию от 3 минут.</span></li><li><strong>Ждёшь подтверждения</strong><span>Сигнал возможен только при свежих котировках и проверенном анализе.</span></li><li><strong>Открываешь вход сам</strong><span>Бот не совершает сделки и не управляет счётом.</span></li><li><strong>Смотришь результаты</strong><span>История и статистика учитывают реальные сигналы. Пропуски считаются отдельно.</span></li></ol></dialog>
+  <div class="toast" id="toast" role="status" hidden></div>
+</body>
+</html>
