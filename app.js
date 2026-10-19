@@ -274,21 +274,57 @@ $("#connect-backend").addEventListener("click",async () => {
   if (dataClient?.base) $("#backend-url").value=dataClient.base;
   if (current?.mode === "api" && current.risk) await pair();
 });
-let pairingTimer;
-async function pair() {
-  try {
-    const result=await api("/api/pair",{});
-    text("#pair-code",result.code); $("#pairing-box").hidden=false;
-    clearTimeout(pairingTimer); pairingTimer=setTimeout(() => { text("#pair-code",""); $("#pairing-box").hidden=true; text("#connect-status","Код истёк. Открой подключение снова."); },result.expires_in*1000);
-  } catch(error) { text("#connect-status",error.message); }
+let pairingTimer,pairGeneration=0,connectGeneration=0,activePair=null;
+let pairChain=Promise.resolve();
+function clearPair() {
+  pairGeneration++;activePair=null;clearTimeout(pairingTimer);
+  text("#pair-code","");text("#pair-server","");
+  $("#pairing-box").hidden=true;$("#copy-code").disabled=true;
 }
-$("#backend-form").addEventListener("submit",async e => {
-  e.preventDefault(); text("#connect-status","Проверяем сервер…");
+async function pair(renew=false) {
+  const client=dataClient;
+  if(activePair?.client===client&&activePair.expires>Date.now()&&!renew){$("#pairing-box").hidden=false;return;}
+  clearPair();const sequence=pairGeneration;
   try {
-    const result=await window.TredData.connect(telegram,$("#backend-url").value.trim());
+    // Serialize code creation: an older request must not invalidate a newer one.
+    const request=pairChain.then(()=>{
+      if(sequence!==pairGeneration||client!==dataClient)return null;
+      const started=Date.now();
+      return client.request("/api/pair",{}).then(result=>({result,started}));
+    });
+    pairChain=request.catch(()=>{});
+    const reply=await request;
+    if(!reply||sequence!==pairGeneration||client!==dataClient)return;
+    const {result,started}=reply;
+    if(!/^[a-f0-9]{24}$/.test(result?.code)||!Number.isFinite(result.expires_in)||result.expires_in<=0||result.expires_in>300)throw new Error("Сервер не выдал действительный код связи.");
+    const expires=started+result.expires_in*1000;
+    if(expires<=Date.now())throw new Error("Код истёк во время запроса. Получи новый код.");
+    activePair={client,code:result.code,expires};
+    text("#pair-code",result.code);text("#pair-server","Код для сервера: "+(client.base||location.origin));
+    $("#pairing-box").hidden=false;$("#copy-code").disabled=false;
+    pairingTimer=setTimeout(()=>{
+      if(sequence!==pairGeneration)return;
+      activePair=null;text("#pair-code","Код истёк");$("#copy-code").disabled=true;
+      text("#connect-status","Нажми «Получить новый код».");
+    },expires-Date.now());
+  } catch(error) {
+    if(sequence===pairGeneration&&client===dataClient)text("#connect-status",error.message);
+  }
+}
+$("#backend-url").addEventListener("input",()=>{connectGeneration++;clearPair();});
+$("#backend-form").addEventListener("submit",async e => {
+  e.preventDefault();const sequence=++connectGeneration;clearPair();text("#connect-status","Проверяем сервер…");
+  try {
+    const result=await window.TredData.connect(telegram,$("#backend-url").value.trim(),{persist:false});
+    if(sequence!==connectGeneration)return;
+    result.commit?.();
     dataClient=result.client; current=result.state; authorized=true; render(); setBusy(false);
     text("#connect-status","Сервер подключён. Вставь адрес и код в модуль браузера."); await pair();
-  } catch(error) { text("#connect-status",error.message || "Нет связи с сервером."); }
+  } catch(error) { if(sequence===connectGeneration)text("#connect-status",error.message || "Нет связи с сервером."); }
 });
-$("#copy-code").addEventListener("click",async () => { try { await navigator.clipboard.writeText($("#pair-code").textContent); notify("Код скопирован."); } catch(_) { notify("Выдели и скопируй код вручную."); } });
-$("#unlink-account").addEventListener("click",async () => { try { current=await api("/api/unlink",{}); render(); text("#pair-code",""); $("#pairing-box").hidden=true; notify("Ключ модуля отозван. Симуляция остановлена."); } catch(error) { notify(error.message); } });
+$("#renew-code").addEventListener("click",()=>pair(true));
+$("#copy-code").addEventListener("click",async () => {
+  if(!activePair||activePair.client!==dataClient||activePair.expires<=Date.now()){notify("Получи действительный код для текущего сервера.");return;}
+  try { await navigator.clipboard.writeText(activePair.code); notify("Код скопирован."); } catch(_) { notify("Выдели и скопируй код вручную."); }
+});
+$("#unlink-account").addEventListener("click",async () => { try { current=await api("/api/unlink",{}); clearPair();render();notify("Ключ модуля отозван. Симуляция остановлена."); } catch(error) { notify(error.message); } });

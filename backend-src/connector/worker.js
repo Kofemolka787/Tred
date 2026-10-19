@@ -1,5 +1,6 @@
 "use strict";
 importScripts("time-check.js");
+const WORKER_VERSION="0.3.2";
 const endpoint=value=>{
   const u=new URL(value);
   if(u.protocol!=="https:"||!/^[a-z0-9-]+\.trycloudflare\.com$/.test(u.hostname)||u.port||u.username||u.password||u.search||u.hash||u.pathname!=="/")throw new Error("Укажи HTTPS-адрес своего TRED-туннеля.");
@@ -7,8 +8,12 @@ const endpoint=value=>{
 };
 async function post(base,path,body,token){
   const response=await fetch(base+path,{method:"POST",headers:{"Content-Type":"application/json",...(token?{Authorization:"Bearer "+token}:{})},body:JSON.stringify(body),signal:AbortSignal.timeout(10000),redirect:"error",credentials:"omit"});
-  const result=await response.json();
+  let result;
+  try{result=await response.json();}
+  catch(_){throw new Error("Вместо API получена страница (HTTP "+response.status+"). Проверь адрес из текущего окна сервера TRED.");}
+  if(!result||typeof result!=="object"||Array.isArray(result))throw new Error("Сервер вернул неподдерживаемый ответ. Проверь текущий адрес TRED.");
   if(!response.ok){const error=new Error(result.message||"Нет связи с сервером.");error.status=response.status;throw error;}
+  if(path==="/api/bridge/events"&&result.ok!==true)throw new Error("Сервер не подтвердил приём данных.");
   return result;
 }
 chrome.storage.local.setAccessLevel({accessLevel:"TRUSTED_CONTEXTS"});
@@ -65,6 +70,7 @@ chrome.runtime.onMessage.addListener((message,sender,reply)=>{
     if(message.action==="pair"&&!sender.tab){
       const base=endpoint(message.base);
       const result=await post(base,"/api/bridge/claim",{code:message.code});
+      if(typeof result.token!=="string"||!/^[A-Za-z0-9_-]{32,100}$/.test(result.token))throw new Error("Сервер не подтвердил связь. Прежние настройки сохранены.");
       // A rejected claim preserves the previously stored binding.
       generation++;queue=[];
       await chrome.storage.local.set({base,token:result.token,lastError:"",lastSeen:null,needsPairing:false,timeWarnings:{},receivedKinds:[]});
@@ -74,7 +80,7 @@ chrome.runtime.onMessage.addListener((message,sender,reply)=>{
     if(message.action==="status"&&!sender.tab){
       const {base,token,lastError,lastSeen,needsPairing,timeWarnings,receivedKinds}=await chrome.storage.local.get(["base","token","lastError","lastSeen","needsPairing","timeWarnings","receivedKinds"]);
       const diagnostic=Object.entries(timeWarnings||{}).filter(([kind,value])=>TredTime.kinds.includes(kind)&&typeof value==="string").map(([,value])=>value).join("\n");
-      return {base,paired:!!(base&&token),needsPairing:!!needsPairing,lastError,lastSeen,diagnostic,receivedKinds:(receivedKinds||[]).filter(x=>TredTime.kinds.includes(x))};
+      return {worker_version:WORKER_VERSION,base,paired:!!(base&&token),needsPairing:!!needsPairing,lastError,lastSeen,diagnostic,receivedKinds:(receivedKinds||[]).filter(x=>TredTime.kinds.includes(x))};
     }
     if(message.action==="events"&&sender.tab&&/^https:\/\/([a-z0-9-]+\.)*pocketoption\.com\//.test(sender.url||"")&&Array.isArray(message.events)){
       queue.push(...message.events.slice(0,250));queue=queue.slice(-1000);schedule();return {ok:true};

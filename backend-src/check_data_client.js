@@ -1,0 +1,22 @@
+"use strict";
+const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
+const saved=[];
+const context={window:{},URL,AbortSignal,AbortController,setTimeout,clearTimeout,document:{baseURI:'https://fixture.invalid/'},localStorage:{setItem:(...x)=>saved.push(x)}};
+vm.createContext(context);vm.runInContext(fs.readFileSync('web/data-client.js','utf8'),context);
+const tg={initData:'signed-fixture-only',initDataUnsafe:{user:{id:101}}},url='https://fixture-route.trycloudflare.com';
+const health={ok:true,service:'tred-backend',api_version:1};
+(async()=>{
+  context.fetch=async()=>{throw new TypeError('Failed to fetch');};
+  await assert.rejects(context.window.TredData.connect(tg,url),/мобильный интернет/);
+  assert.equal(saved.length,0);
+  context.fetch=async()=>({ok:true,json:async()=>({service:'tred-backend',api_version:1})});
+  await assert.rejects(context.window.TredData.connect(tg,url),/не найден сервер/);
+  context.fetch=async path=>({ok:path.endsWith('/healthz'),json:async()=>path.endsWith('/healthz')?health:{message:'Rejected identity'}});
+  await assert.rejects(context.window.TredData.connect(tg,url),/Rejected identity/);assert.equal(saved.length,0);
+  context.fetch=async path=>({ok:true,json:async()=>path.endsWith('/healthz')?health:{user:{id:101}}});
+  const result=await context.window.TredData.connect(tg,url,{persist:false});
+  assert.equal(saved.length,0,'Uncommitted connection must not replace saved server');
+  result.commit();assert.equal(saved.length,1);assert.equal(saved[0][1],url);
+  await context.window.TredData.connect(tg,url);assert.equal(saved.length,2,'Existing direct callers still persist');
+  console.log(JSON.stringify({ok:true,connection_checks:5,failed_auth_does_not_persist:true,deferred_commit_prevents_stale_connection_overwrite:true}));
+})().catch(error=>{console.error(error);process.exitCode=1;});

@@ -29,6 +29,7 @@ async function checks(){
   assert.equal(h.requests[2].body.events[0].time,now,"No timestamp rewriting");
   let status=await h.message({action:"status"});
   assert(status.paired&&!status.needsPairing&&status.lastSeen);
+  assert.equal(status.worker_version,"0.3.2");
   assert.match(status.diagnostic,/quote|Котировка/);assert.match(status.diagnostic,/30 с/);
   assert(!JSON.stringify(status).includes(token));
   assert(!JSON.stringify(h.storage).includes('"balance"'));
@@ -64,6 +65,13 @@ async function checks(){
   assert(!JSON.stringify(secret.requests).includes("fixture-secret"));
   assert(!JSON.stringify(secret.storage).includes("fixture-secret"));
 
+  const html=harness(()=>({ok:false,status:530,json:async()=>{throw new SyntaxError('Unexpected token <');}}));
+  assert.match((await html.message({action:"pair",base,code:"fixture"})).error,/Вместо API получена страница \(HTTP 530\)/);
+  assert.equal(html.storage.token,token);
+  const missing=harness(()=>response(200,{ok:true}));
+  assert.match((await missing.message({action:"pair",base,code:"fixture"})).error,/не подтвердил связь/);
+  assert.equal(missing.storage.token,token);
+
   let release,started;
   const waiting=new Promise(resolve=>started=resolve);
   const racing=harness(()=>{started();return new Promise(resolve=>release=resolve);});
@@ -71,7 +79,7 @@ async function checks(){
   await racing.message({action:"disconnect"});release(response(200,{ok:true}));await pending;
   assert.deepEqual(racing.storage,{});
   assert.equal((await h.message({action:"events",events:[quote]},{tab:{id:2},url:"https://evil.example/"})).error,"Действие недоступно.");
-  console.log(JSON.stringify({ok:true,worker_scenarios:9,timestamps_not_rewritten:true,bad_quote_does_not_block_account:true,failed_claim_preserves_binding:true,status_excludes_token:true,unknown_credential_fields_not_sent:true,late_response_after_disconnect_ignored:true}));
+  console.log(JSON.stringify({ok:true,worker_scenarios:11,timestamps_not_rewritten:true,bad_quote_does_not_block_account:true,failed_claim_preserves_binding:true,status_excludes_token:true,unknown_credential_fields_not_sent:true,late_response_after_disconnect_ignored:true,html_and_missing_token_keep_binding:true}));
 }
 async function realHttp(){
   const api=process.argv[process.argv.indexOf("--api")+1],fixtureToken=process.argv[process.argv.indexOf("--fixture-token")+1];

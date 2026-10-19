@@ -72,7 +72,7 @@ window.TredData = (() => {
       finally { clearTimeout(timer); }
     }};
   }
-  async function connect(tg,value) {
+  async function connect(tg,value,options={}) {
     if (!tg?.initData) throw new Error("Открой TRED из Telegram, чтобы связать личный кабинет.");
     const base = endpoint(value);
     let response;
@@ -87,8 +87,9 @@ window.TredData = (() => {
     if (!response.ok || health?.ok !== true || health.service !== "tred-backend" || health.api_version !== 1) throw new Error("По этому адресу не найден сервер TRED.");
     const client = apiClient(tg,base);
     const state = await client.request("/api/state"); // Verified by server; metadata ID never authorizes access.
-    try { localStorage.setItem(key(tg),base); } catch (_) {}
-    return {client,state};
+    const commit=()=>{try { localStorage.setItem(key(tg),base); } catch (_) {}};
+    if(options.persist!==false)commit();
+    return {client,state,commit};
   }
   async function create(tg) {
     let base;
