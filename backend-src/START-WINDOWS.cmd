@@ -1,24 +1,39 @@
 @echo off
+setlocal
 chcp 65001 >nul
 cd /d "%~dp0"
 where py >nul 2>nul
-if errorlevel 1 (
-  echo Установи Python 3.12 или новее с https://www.python.org/downloads/windows/
-  echo Затем снова открой этот файл. Пароли и платёжные данные не нужны.
-  pause
-  exit /b 1
-)
-py -3 -c "import sys; assert sys.version_info >= (3,12), 'Нужен Python 3.12+'"
+if errorlevel 1 goto try_python
+set "TRED_PY=py -3"
+goto python_ready
+
+:try_python
+where python >nul 2>nul
+if errorlevel 1 goto python_required
+set "TRED_PY=python"
+
+:python_ready
+%TRED_PY% -c "import sys; assert sys.version_info >= (3,12), 'Python 3.12 or later is required'"
+if errorlevel 1 goto python_required
+if not exist ".venv\Scripts\python.exe" %TRED_PY% -m venv ".venv"
 if errorlevel 1 goto failed
-if not exist ".venv\Scripts\python.exe" py -3 -m venv .venv
+".venv\Scripts\python.exe" -m pip install --disable-pip-version-check --only-binary=:all: --require-hashes -r "requirements-web.txt"
 if errorlevel 1 goto failed
-".venv\Scripts\python.exe" -m pip install --disable-pip-version-check --only-binary=:all: --require-hashes -r requirements-web.txt
-if errorlevel 1 goto failed
-".venv\Scripts\python.exe" free_start.py
+".venv\Scripts\python.exe" "free_start.py"
 if errorlevel 1 goto failed
 pause
 exit /b 0
+
+:python_required
+echo.
+echo Install Python 3.12 or later from:
+echo https://www.python.org/downloads/windows/
+echo Then open START-WINDOWS.cmd again.
+pause
+exit /b 1
+
 :failed
-echo Запуск остановлен. Скопируй сообщение об ошибке без личных данных.
+echo.
+echo TRED setup stopped. Keep this window open and share the error message.
 pause
 exit /b 1
