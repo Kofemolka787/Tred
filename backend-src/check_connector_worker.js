@@ -10,15 +10,15 @@ const account={type:"account",mode:"demo",account_id:"456",currency:"USD",balanc
 const asset={type:"asset",symbol:"EURUSD",market:"normal",is_open:true,payout:.8,expiries:[5],time:now};
 const quote={type:"quote",symbol:"EURUSD",price:1.1,time:now};
 function harness(fetcher,initial={}){
-  const storage={base,token,...initial},requests=[];let listener;
-  const context={URL,Date:class extends Date{static now(){return now*1000;}},AbortSignal,console,setTimeout:()=>1,
+  const storage={base,token,...initial},requests=[];let listener,clockMillis=now*1000;
+  const context={URL,Date:class extends Date{static now(){return clockMillis;}},AbortSignal,console,setTimeout:()=>1,
     chrome:{storage:{local:{setAccessLevel:()=>{},get:async keys=>Object.fromEntries(keys.map(k=>[k,storage[k]])),set:async value=>Object.assign(storage,value),clear:async()=>{for(const k in storage)delete storage[k];}}},runtime:{onMessage:{addListener:fn=>listener=fn}}},
     fetch:async(url,options)=>{requests.push({url,options,body:JSON.parse(options.body)});return fetcher?fetcher(url,options):response(200,{ok:true});}
   };
   vm.createContext(context);
   context.importScripts=(...names)=>names.forEach(name=>vm.runInContext(fs.readFileSync("connector/"+name,"utf8"),context));
   vm.runInContext(fs.readFileSync("connector/worker.js","utf8"),context);
-  return {storage,requests,context,message:(message,from={})=>new Promise(resolve=>listener(message,from,resolve)),
+  return {storage,requests,context,advance:seconds=>clockMillis+=seconds*1000,message:(message,from={})=>new Promise(resolve=>listener(message,from,resolve)),
     async events(events){await this.message({action:"events",events},sender);await vm.runInContext("flush()",context);}};
 }
 async function checks(){
@@ -29,7 +29,7 @@ async function checks(){
   assert.equal(h.requests[2].body.events[0].time,now,"No timestamp rewriting");
   let status=await h.message({action:"status"});
   assert(status.paired&&!status.needsPairing&&status.lastSeen);
-  assert.equal(status.worker_version,"0.3.4");
+  assert.equal(status.worker_version,"0.3.5");
   assert.match(status.diagnostic,/quote|Котировка/);assert.match(status.diagnostic,/30 с/);
   assert(!JSON.stringify(status).includes(token));
   assert(!JSON.stringify(h.storage).includes('"balance"'));
@@ -147,26 +147,66 @@ async function checks(){
   const rebind=harness(()=>response(200,{token:token+"new"}),{confirmedUsdAccounts:["456:demo"],accountCandidate:copy(candidate)});
   assert((await rebind.message({action:"pair",base,code:"fixture"})).ok);
   assert.deepEqual(copy(rebind.storage.confirmedUsdAccounts),[]);assert.equal(rebind.storage.accountCandidate,null);
-  console.log(JSON.stringify({ok:true,worker_scenarios:24,utc_timestamps_unchanged:true,bad_quote_does_not_block_account:true,failed_claim_preserves_binding:true,status_excludes_token:true,unknown_credential_fields_not_sent:true,late_response_after_disconnect_ignored:true,html_and_missing_token_keep_binding:true,explicit_po_utc2_profile:true,stale_and_future_still_rejected:true,closed_candles_decoded_before_filter:true,source_time_provenance_retained:true,no_arrival_time_calibration:true,usd_requires_confirmation_when_missing:true,confirmation_scoped_to_account_and_mode:true,explicit_other_currency_cannot_be_overridden:true,confirmation_never_replays_old_balance:true}));
+  const stream="11111111-1111-4111-8111-111111111111",otherStream="22222222-2222-4222-8222-222222222222";
+  const unidentified={...account,account_id:null,currency:null,source_stream:stream,id_status:"missing"};
+  const manual=harness();await manual.events([unidentified,quote]);
+  assert.equal(manual.requests.length,1);assert.equal(manual.storage.identityCandidate.source_stream,stream);
+  assert(!JSON.stringify(manual.storage).includes('"balance"'),"Pending balance is not persisted");
+  const bind={action:"confirm-account-id",source_stream:stream,mode:"demo",account_id:"456",confirm_usd:true,active_tab_id:1};
+  assert((await manual.message(bind,sender)).error,"Page cannot confirm an ID");
+  assert((await manual.message({...bind,source_stream:otherStream})).error);
+  assert((await manual.message({...bind,mode:"real"})).error);
+  assert((await manual.message({...bind,active_tab_id:2})).error);
+  assert((await manual.message({action:"status",active_tab_id:2})).identityNeedsTab);
+  assert.equal((await manual.message({action:"status",active_tab_id:2})).identityCandidate,null);
+  assert((await manual.message({action:"status",active_tab_id:1})).identityCandidate);
+  assert((await manual.message({...bind,account_id:"not-an-id"})).error);
+  assert((await manual.message({...bind,confirm_usd:false})).error);
+  assert((await manual.message(bind)).ok);
+  assert.equal(manual.requests.length,2,"Fresh held balance is delivered after explicit confirmation");
+  const delivered=manual.requests.at(-1).body.events[0];
+  assert.equal(delivered.account_id,"456");assert.equal(delivered.currency,"USD");assert.equal(delivered.time,now);
+  assert(!Object.hasOwn(delivered,'source_stream')&&!Object.hasOwn(delivered,'id_status'));
+  assert.equal(manual.storage.token,token);
+  assert.equal(manual.storage.accountCandidate.identity_source,'manual');
+  assert.equal(manual.storage.identityCandidate,null);
+  assert(!JSON.stringify(manual.storage).includes('"balance"'));
+  const resumedManual=harness(null,copy(manual.storage));await resumedManual.events([unidentified]);
+  assert.equal(resumedManual.requests[0].body.events[0].account_id,"456","Same live stream survives worker restart");
+  await manual.events([{...unidentified,source_stream:otherStream}]);assert.equal(manual.requests.length,2);
+  await manual.events([{...unidentified,mode:"real"}]);assert.equal(manual.requests.length,2,"New stream or mode never inherits a manual ID");
+  await manual.events([{...unidentified,account_id:"789",currency:"USD",id_status:"present"}]);
+  assert.equal(manual.requests.at(-1).body.events[0].account_id,"789","Explicit broker ID wins over a manual binding");
+  const beforeConflict=manual.requests.length;
+  await manual.events([{...unidentified,id_status:"conflict"},{...unidentified,id_status:"invalid"}]);
+  assert.equal(manual.requests.length,beforeConflict);assert.equal(manual.storage.identityCandidate,null);
+  const expiredBalance=harness();await expiredBalance.events([unidentified]);expiredBalance.advance(61);
+  assert((await expiredBalance.message(bind)).error);assert.equal(expiredBalance.requests.length,0,"Held amount is never freshened");
+  const cold=harness(null,{identityCandidate:{source_stream:stream,mode:"demo",reported_currency:null,seen_at:now,tab_id:1}});
+  assert.match((await cold.message(bind)).error,/Обнови график/,"After a cold restart a new actual balance is required");
+  const credential=harness();await credential.events([{...unidentified,session:"fixture-private-session"}]);
+  assert.equal(credential.storage.identityCandidate,null);assert.equal(credential.requests.length,0);
+  console.log(JSON.stringify({ok:true,worker_scenarios:31,utc_timestamps_unchanged:true,bad_quote_does_not_block_account:true,failed_claim_preserves_binding:true,status_excludes_token:true,unknown_credential_fields_not_sent:true,late_response_after_disconnect_ignored:true,html_and_missing_token_keep_binding:true,explicit_po_utc2_profile:true,stale_and_future_still_rejected:true,closed_candles_decoded_before_filter:true,source_time_provenance_retained:true,no_arrival_time_calibration:true,usd_requires_confirmation_when_missing:true,confirmation_scoped_to_account_and_mode:true,explicit_other_currency_cannot_be_overridden:true,currency_confirmation_does_not_replay_balance:true,manual_identity_scoped_to_stream_and_mode:true,fresh_pending_balance_keeps_original_time:true,pending_balance_not_persisted:true,broker_identity_not_overridden:true}));
 }
 async function realHttp(){
   const api=process.argv[process.argv.indexOf("--api")+1],fixtureToken=process.argv[process.argv.indexOf("--fixture-token")+1];
   assert(/^http:\/\/127\.0\.0\.1:\d+$/.test(api));
   const h=harness((url,options)=>fetch(url.replace(base,api),options),{token:fixtureToken});
-  const missingCurrency={...account,currency:null};
-  await h.events([missingCurrency,asset,quote,{...quote,time:now+30}]);
+  const missingIdentity={...account,account_id:null,currency:null,source_stream:"11111111-1111-4111-8111-111111111111",id_status:"missing"};
+  await h.events([missingIdentity,asset,quote,{...quote,time:now+30}]);
   const s=await h.message({action:"status"});
   assert.equal(s.lastError,"");assert(s.paired&&s.lastSeen);
   assert.deepEqual(copy(s.receivedKinds),["asset","quote"]);
   assert.match(s.diagnostic,/30 с/);
   assert((await h.message({action:"market-clock",profile:"po-utc2"})).ok);
-  assert((await h.message({action:"confirm-usd",account_id:"456",mode:"demo"})).ok);
+  assert((await h.message({action:"confirm-account-id",account_id:"456",mode:"demo",source_stream:missingIdentity.source_stream,confirm_usd:true,active_tab_id:1})).ok);
+  assert.equal(h.requests.at(-1).body.events[0].time,now);
   const native={...quote,time:now+7200,source_clock:"po-market-native-v1"};
   const candle={type:"candle",symbol:"EURUSD",period:60,time:Math.floor(now/60)*60-60+7200,open:1.1,close:1.2,high:1.3,low:1.0,source_clock:"po-market-native-v1"};
-  await h.events([missingCurrency,native,{...native,time:now+7200+30},{...native,time:now+7200-61},candle,{...candle,time:candle.time+60}]);
+  await h.events([missingIdentity,native,{...native,time:now+7200+30},{...native,time:now+7200-61},candle,{...candle,time:candle.time+60}]);
   const decoded=await h.message({action:"status"});
   assert.equal(decoded.lastError,"");assert(decoded.receivedKinds.includes("account")&&decoded.receivedKinds.includes("quote")&&decoded.receivedKinds.includes("candle"));
   assert.equal(h.requests.at(-2).body.events.length,1);assert.equal(h.requests.at(-1).body.events.length,1);
-  console.log(JSON.stringify({ok:true,actual_backend_http:true,good_types_accepted:4,bad_future_quote_not_sent:true,po_utc2_quote_and_closed_candle_accepted:true,stale_native_quote_not_sent:true,missing_currency_held_until_scoped_confirmation:true}));
+  console.log(JSON.stringify({ok:true,actual_backend_http:true,good_types_accepted:4,bad_future_quote_not_sent:true,po_utc2_quote_and_closed_candle_accepted:true,stale_native_quote_not_sent:true,missing_identity_and_currency_held_until_scoped_confirmation:true}));
 }
 (process.argv.includes("--api")?realHttp():checks()).catch(error=>{console.error(error);process.exitCode=1;});

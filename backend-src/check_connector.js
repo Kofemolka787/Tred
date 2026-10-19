@@ -8,7 +8,7 @@ class Socket {
   send(value){sent.push(value);}
   emit(data){this.handlers.message?.({data});}
 }
-const sandbox={window:{WebSocket:Socket,postMessage:(value)=>forwarded.push(value)},location:{origin:"https://pocketoption.com"},URL,Blob,ArrayBuffer,TextDecoder,Date,Promise,Number,JSON,Object,console};
+const sandbox={window:{WebSocket:Socket,postMessage:(value)=>forwarded.push(value)},location:{origin:"https://pocketoption.com"},URL,Blob,ArrayBuffer,TextDecoder,Date,Promise,Number,JSON,Object,crypto:require('node:crypto'),console};
 vm.runInNewContext(fs.readFileSync("connector/observer.js","utf8"),sandbox);
 const socket=new sandbox.window.WebSocket("wss://demo-api-eu.po.market/socket.io/?EIO=4&transport=websocket");
 socket.emit('42["auth",{"session":"fixture-secret-never-forward","uid":456,"isDemo":1}]');
@@ -56,5 +56,25 @@ setImmediate(async()=>{
   assert.equal(at('20').mode,null,"Mode must be explicit on a balance event");
   assert.equal(at('110').account_id,"456");assert.equal(at('110').currency,"USD");
   assert(!JSON.stringify(forwarded).includes("fixture-secret"));assert.equal(sent.length,0);
-  console.log(JSON.stringify({ok:true,fixture_protocol:true,auth_fields_not_exported:true,no_outbound_commands:true,binary_quotes_decoded:true,incomplete_settlements_ignored:true,source_clock_tagged_without_timestamp_changes:true,account_identity_scoped_to_socket:true,split_metadata_and_unframed_balance:true,missing_currency_and_mode_not_guessed:true}));
+  forwarded=[];
+  const aliases=new sandbox.window.WebSocket("wss://api-eu.po.market/socket.io/");
+  aliases.emit('42["successauth",{"id":321,"isDemo":1}]');
+  aliases.emit('42["successupdateBalance",{"balance":31,"isDemo":1,"currency":"USD"}]');
+  aliases.emit('42["successauth",{"accountId":"654","isDemo":0,"balance":32,"currency":"USD"}]');
+  aliases.emit('42["successauth",{"uid":345,"id":346,"isDemo":1,"balance":33}]');
+  aliases.emit('42["successupdateBalance",{"uid":"bad","balance":34,"isDemo":1}]');
+  const generic=new sandbox.window.WebSocket("wss://api-eu.po.market/socket.io/");
+  generic.emit('42["successupdateBalance",{"id":987,"balance":35,"isDemo":1}]');
+  generic.emit('42["successupdateBalance",{"accountId":"777","balance":36,"isDemo":0}]');
+  await new Promise(setImmediate);
+  const selected=forwarded.flatMap(x=>x.events).filter(x=>x.type==="account");
+  const balance=value=>selected.find(x=>x.balance===value);
+  assert.equal(balance('31').account_id,'321');assert.equal(balance('32').account_id,'654');
+  assert.notEqual(balance('31').source_stream,balance('32').source_stream,"Reauthentication rotates the manual confirmation boundary");
+  assert.equal(balance('33').account_id,null);assert.equal(balance('33').id_status,'conflict');
+  assert.equal(balance('34').account_id,null);assert.equal(balance('34').id_status,'invalid');
+  assert.equal(balance('35').account_id,null,"Generic balance id is not an account ID");
+  assert.equal(balance('36').account_id,'777');
+  assert.equal(sent.length,0);
+  console.log(JSON.stringify({ok:true,fixture_protocol:true,auth_fields_not_exported:true,no_outbound_commands:true,binary_quotes_decoded:true,incomplete_settlements_ignored:true,source_clock_tagged_without_timestamp_changes:true,account_identity_scoped_to_socket:true,split_metadata_and_unframed_balance:true,missing_currency_and_mode_not_guessed:true,auth_id_aliases_and_conflicts_checked:true,reauth_rotates_confirmation_context:true}));
 });

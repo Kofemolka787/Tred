@@ -24,14 +24,21 @@ try:
             page=browser.new_page(viewport={"width":340,"height":820});errors=[]
             page.on("pageerror",lambda error:errors.append(str(error)))
             page.add_init_script("""
-              window.fixture={worker_version:'0.3.4',base:'https://fixture-route.trycloudflare.com',paired:true,needsPairing:false,lastError:'',diagnostic:'Котировка · time: опережает часы браузера примерно на 7200 с. Событие не передано.',receivedKinds:['asset'],marketClock:'utc'};
+              window.fixture={worker_version:'0.3.5',base:'https://fixture-route.trycloudflare.com',paired:true,needsPairing:false,lastError:'',diagnostic:'Котировка · time: опережает часы браузера примерно на 7200 с. Событие не передано.',receivedKinds:['asset'],marketClock:'utc'};
               window.reloaded=0;
-              window.chrome={runtime:{sendMessage:async message=>{
+              window.fixtureTabId=1;window.idConfirmations=0;
+              window.chrome={tabs:{query:async()=>[{id:window.fixtureTabId}]},runtime:{sendMessage:async message=>{
                 if(message.action==='status')return structuredClone(window.fixture);
-                if(message.action==='disconnect'){window.fixture={worker_version:'0.3.4',paired:false,lastError:'Старая ошибка'};return {ok:true};}
+                if(message.action==='disconnect'){window.fixture={worker_version:'0.3.5',paired:false,lastError:'Старая ошибка'};return {ok:true};}
                 if(message.action==='market-clock'){window.fixture.marketClock=message.profile;window.fixture.diagnostic='';return {ok:true};}
                 if(message.action==='confirm-usd'){if(message.account_id!==window.fixture.accountCandidate.account_id||message.mode!==window.fixture.accountCandidate.mode)throw Error('Wrong account');window.fixture.usdConfirmed=true;return {ok:true};}
                 if(message.action==='forget-usd'){window.fixture.usdConfirmed=false;return {ok:true};}
+                if(message.action==='confirm-account-id'){
+                  if(message.account_id!=='456'||message.mode!=='demo'||message.active_tab_id!==1||!message.confirm_usd)throw Error('Wrong manual identity');
+                  window.idConfirmations++;
+                  window.fixture.accountCandidate={account_id:message.account_id,mode:message.mode,reported_currency:null,identity_source:'manual',source_stream:message.source_stream};
+                  window.fixture.usdConfirmed=true;window.fixture.identityCandidate=null;window.fixture.lastSeen=Date.now();window.fixture.receivedKinds=['asset','quote','account'];return {ok:true};
+                }
                 if(message.action==='pair')return {error:'Код связи неверен или истёк.'};
                 throw Error('Unexpected action');
               },reload:()=>window.reloaded++}};
@@ -65,6 +72,21 @@ try:
             assert 'обнови' in page.locator('#currency-error').inner_text()
             page.locator('#forget-usd').click()
             page.locator('#confirm-usd').wait_for()
+            page.evaluate("window.fixture.accountCandidate=null;window.fixture.identityCandidate={source_stream:'11111111-1111-4111-8111-111111111111',mode:'demo',reported_currency:null,tab_id:1};window.fixture.lastManualAccountId=''")
+            page.locator('#manual-identity').wait_for()
+            page.locator('#pocket-id').fill('456')
+            page.wait_for_timeout(2200)
+            assert page.locator('#pocket-id').input_value()=='456','Polling must preserve typed ID'
+            page.locator('#identity-form button').click()
+            assert page.evaluate('window.idConfirmations')==0,'Currency checkbox requires explicit confirmation'
+            page.locator('#identity-usd').check()
+            page.screenshot(path=str(ROOT/'artifacts/connector-manual-id.png'),full_page=True)
+            page.locator('#identity-form button').click()
+            page.locator('#manual-id-status').wait_for()
+            assert 'Pocket ID 456' in page.locator('#manual-id-status').inner_text()
+            assert not page.locator('#manual-identity').is_visible()
+            assert not page.locator('#form').is_visible()
+            assert 'баланс' in page.locator('#received').inner_text()
             assert page.evaluate("document.documentElement.scrollWidth<=innerWidth")
             page.screenshot(path=str(ROOT/"artifacts/connector-popup-fixed.png"))
             page.locator("#change").click();assert page.locator("#form").is_visible()
@@ -90,7 +112,7 @@ try:
             assert 'Модуль ещё не связан' not in page.locator('#connection').inner_text()
             page.locator('#reload-module').click();assert page.evaluate('window.reloaded')==1
             assert not errors,errors
-            result={"actual_html_js_fixture_ui":True,"paired_form_hidden":True,"time_diagnostic_visible":True,"explicit_clock_toggle_and_revert":True,"account_usd_confirmation_and_revoke":True,"pocket_account_identity_visible":True,"clock_selection_preserves_pairing_ui":True,"status_poll_preserves_typed_address":True,"failed_claim_keeps_connection_status":True,"legacy_worker_detected":True,"stale_data_error_hidden_when_unpaired":True,"page_errors":len(errors),"native_mv3_update_verified":False,"native_mv3_blocker":"Managed Chromium administrator policy disables unpacked extension loading"}
+            result={"actual_html_js_fixture_ui":True,"paired_form_hidden":True,"time_diagnostic_visible":True,"explicit_clock_toggle_and_revert":True,"account_usd_confirmation_and_revoke":True,"pocket_account_identity_visible":True,"manual_id_form_with_explicit_usd":True,"poll_preserves_typed_id":True,"manual_id_provenance_visible":True,"clock_selection_preserves_pairing_ui":True,"status_poll_preserves_typed_address":True,"failed_claim_keeps_connection_status":True,"legacy_worker_detected":True,"stale_data_error_hidden_when_unpaired":True,"page_errors":len(errors),"native_mv3_update_verified":False,"native_mv3_blocker":"Managed Chromium administrator policy disables unpacked extension loading"}
             (ROOT/"artifacts/connector-popup-check.json").write_text(json.dumps(result,indent=2)+'\n')
             print(json.dumps(result))
         finally:browser.close()

@@ -7,6 +7,16 @@
   const ts = v => number(v) ? (v > 1e11 ? v / 1000 : v) : null;
   const emit = events => { if (events.length) window.postMessage({source:"tred-observer-v1", events:events.slice(0,250)}, location.origin); };
   const accountId = value => (typeof value === "string" || typeof value === "number" && Number.isSafeInteger(value)) && /^\d{1,20}$/.test(String(value)) ? String(value) : null;
+  const identity = (name,data) => {
+    // `id` belongs to the authenticated account only in successauth. A generic
+    // balance/order `id` must never be interpreted as a Pocket account ID.
+    const fields = name === "successauth" ? ["uid","accountId","id"] : ["uid","accountId"];
+    const values = fields.filter(key=>Object.hasOwn(data,key)&&data[key]!=null).map(key=>accountId(data[key]));
+    if(!values.length)return {uid:null,status:"missing",present:false};
+    if(values.some(value=>value===null))return {uid:null,status:"invalid",present:true};
+    if(new Set(values).size!==1)return {uid:null,status:"conflict",present:true};
+    return {uid:values[0],status:"present",present:true};
+  };
   const currency = value => value == null ? null : typeof value === "string" && /^[A-Za-z]{3}$/.test(value) ? value.toUpperCase() : "unsupported";
   function normalize(name, data, state) {
     const now = Date.now()/1000;
@@ -14,17 +24,18 @@
     if (data && !Array.isArray(data) && (name === "successauth" || name === "successupdateBalance" || name === "balance")) {
       // Identity/currency belong to this socket, never another account's socket.
       // A missing mode or currency is forwarded as missing, never guessed.
-      if (name === "successauth" || Object.hasOwn(data,"uid")) {
-        const uid = accountId(data.uid);
-        if (name === "successauth" || uid !== state.uid) { state.currencies = {}; state.account = null; }
-        state.uid = uid;
+      const incoming = identity(name,data);
+      if (name === "successauth") state.stream=crypto.randomUUID();
+      if (name === "successauth" || incoming.present) {
+        if (name === "successauth" || incoming.uid !== state.uid) { state.currencies = {}; state.account = null; }
+        state.uid = incoming.uid;state.idStatus=incoming.status;
       }
       const mode = [0,1,false,true].includes(data.isDemo) ? data.isDemo === 1 || data.isDemo === true ? "demo" : "real" : null;
       if (state.uid && mode && Object.hasOwn(data,"currency")) state.currencies[mode] = currency(data.currency);
       const unit = Object.hasOwn(data,"currency") ? currency(data.currency) : state.uid && mode ? state.currencies[mode] ?? null : null;
       state.account = state.uid && mode ? {account_id:state.uid,mode,currency:unit} : null;
       if (number(data.balance) || typeof data.balance === "string" && /^\d{1,8}(\.\d{1,2})?$/.test(data.balance)) {
-        events.push({type:"account",account_id:state.uid,mode,currency:unit,balance:String(data.balance),time:now});
+        events.push({type:"account",account_id:state.uid,mode,currency:unit,balance:String(data.balance),time:now,source_stream:state.stream,id_status:state.idStatus});
       }
     }
     if (Array.isArray(data) && (name === "updateAssets" || name === "assets")) {
@@ -66,7 +77,7 @@
       let host;
       try { host = new URL(args[0]).hostname; } catch (_) { return; }
       if (!(host === "po.market" || host.endsWith(".po.market"))) return;
-      const state = {uid:null,currencies:{},account:null};
+      const state = {uid:null,idStatus:"missing",currencies:{},account:null,stream:crypto.randomUUID()};
       let pending = null;
       let queue = Promise.resolve();
       this.addEventListener("message", event => {

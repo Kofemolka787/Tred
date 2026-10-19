@@ -15,6 +15,20 @@
 <button id="change" type="button" hidden>Изменить подключение</button>
 <p id="status" role="status"></p><p id="received"></p>
 <pre id="diagnostic" hidden></pre>
+<p id="identity-tab-help" hidden>Для подтверждения Pocket ID открой это расширение прямо на вкладке с нужным графиком Pocket Option.</p>
+<section id="manual-identity" hidden>
+  <p><strong>Подтверди Pocket ID</strong></p>
+  <p id="identity-mode"></p>
+  <small>Терминал передал баланс без номера счёта. Скопируй Pocket ID из своего профиля Pocket Option.</small>
+  <form id="identity-form">
+    <label>Pocket ID<input id="pocket-id" type="text" inputmode="numeric" pattern="[0-9]{1,20}" maxlength="20" autocomplete="off" required></label>
+    <label id="identity-usd-label" class="check-label"><input id="identity-usd" type="checkbox">Этот счёт в USD — подтверждаю</label>
+    <button>Подтвердить счёт</button>
+  </form>
+  <small>Подтверждение действует для этого открытого графика. После его перезагрузки или нового входа проверь и подтверди номер снова, если Pocket не передаст ID.</small>
+  <p id="identity-error" role="alert"></p>
+</section>
+<p id="manual-id-status" hidden></p>
 <section id="account-currency" hidden>
   <p id="account-identity"></p>
   <p id="currency-status" role="status"></p>
@@ -30,7 +44,7 @@
   <p id="clock-error" role="alert"></p>
 </section>
 <button id="disconnect" type="button" hidden>Отключить модуль</button>
-<small id="module-version">Модуль 0.3.4</small>
+<small id="module-version">Модуль 0.3.5</small>
 <small>После обновления модуля обнови вкладку Pocket Option. Держи компьютер, сервер и график открытыми. Если Windows показывает неверное время, используй «Синхронизировать сейчас» в настройках часов.</small>
 <script src="popup.js"></script>
 </html>
