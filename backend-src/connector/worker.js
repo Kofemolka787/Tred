@@ -1,6 +1,6 @@
 "use strict";
 importScripts("time-check.js");
-const WORKER_VERSION="0.3.2";
+const WORKER_VERSION="0.3.3";
 const endpoint=value=>{
   const u=new URL(value);
   if(u.protocol!=="https:"||!/^[a-z0-9-]+\.trycloudflare\.com$/.test(u.hostname)||u.port||u.username||u.password||u.search||u.hash||u.pathname!=="/")throw new Error("Укажи HTTPS-адрес своего TRED-туннеля.");
@@ -17,7 +17,7 @@ async function post(base,path,body,token){
   return result;
 }
 chrome.storage.local.setAccessLevel({accessLevel:"TRUSTED_CONTEXTS"});
-const eventFields={account:["type","mode","account_id","currency","balance","time"],asset:["type","symbol","market","is_open","payout","expiries","time"],quote:["type","symbol","price","time"],candle:["type","symbol","period","time","open","high","low","close"],trade:["type","mode","account_id","id","symbol","direction","stake","opened_at","expires_at","closed_at","pnl","status","time"]};
+const eventFields={account:["type","mode","account_id","currency","balance","time"],asset:["type","symbol","market","is_open","payout","expiries","time"],quote:["type","symbol","price","time","source_clock"],candle:["type","symbol","period","time","open","high","low","close","source_clock"],trade:["type","mode","account_id","id","symbol","direction","stake","opened_at","expires_at","closed_at","pnl","status","time"]};
 let queue=[],sending=false,timer,generation=0;
 // One flush/second, at most six type-specific requests. No stale payload replay.
 function schedule(){if(!timer)timer=setTimeout(()=>{timer=null;flush();},1000);}
@@ -26,7 +26,7 @@ async function flush(){
   sending=true;
   const epoch=generation;
   try{
-    const stored=await chrome.storage.local.get(["base","token","needsPairing","timeWarnings","receivedKinds"]);
+    const stored=await chrome.storage.local.get(["base","token","needsPairing","timeWarnings","receivedKinds","marketClock","clockSamples"]);
     const {base,token}=stored;
     if(!base||!token||stored.needsPairing){queue=[];return;}
     const batch=queue.splice(0,250),groups=new Map();
@@ -37,15 +37,23 @@ async function flush(){
     }
     const warnings=Object.fromEntries(Object.entries(stored.timeWarnings||{}).filter(([kind,value])=>TredTime.kinds.includes(kind)&&typeof value==="string"));
     const received=new Set((stored.receivedKinds||[]).filter(x=>TredTime.kinds.includes(x)));
+    const clockSamples={...stored.clockSamples};
     let lastError="",lastSeen=null,needsPairing=false;
     for(const kind of [...TredTime.kinds,"unknown"]){
       const rows=groups.get(kind);
       if(!rows||epoch!==generation)continue;
-      const accepted=[],rejected=[];
+      const accepted=[],rejected=[];let sourceSample;
       for(const event of rows){
         const safe=eventFields[kind]&&Object.keys(event||{}).every(key=>eventFields[kind].includes(key));
-        const error=safe?TredTime.problem(event,Date.now()/1000):{message:TredTime.labels[kind]+": неподдерживаемые поля. Событие не передано."};
-        if(error)rejected.push(error);else accepted.push(event);
+        if(!safe){rejected.push({message:TredTime.labels[kind]+": неподдерживаемые поля. Событие не передано."});continue;}
+        const decoded=TredTime.decode(event,stored.marketClock),now=Date.now()/1000;
+        const error=decoded.error?{message:decoded.error}:TredTime.problem(decoded.event,now);
+        if(error){rejected.push(error);continue;}
+        // The terminal includes the current, unfinished candle in its history.
+        // Never send it to research, including after UTC+2 source decoding.
+        if(kind==="candle"&&[60,300,900].includes(decoded.event.period)&&decoded.event.time+decoded.event.period>now)continue;
+        accepted.push(decoded.event);
+        if(decoded.source)sourceSample=decoded.source;
       }
       if(rejected.length)warnings[kind]=rejected[0].message+" Отклонено в пакете: "+rejected.length+".";
       if(!accepted.length)continue;
@@ -53,6 +61,7 @@ async function flush(){
         await post(endpoint(base),"/api/bridge/events",{events:accepted},token);
         lastSeen=Date.now();
         if(TredTime.kinds.includes(kind))received.add(kind);
+        if(sourceSample)clockSamples[kind]=sourceSample;
         if(!rejected.length)delete warnings[kind];
       }catch(error){
         lastError=error.message.slice(0,200);
@@ -60,7 +69,7 @@ async function flush(){
         if(lastError==="Некорректное время данных."||lastError==="Получены устаревшие данные.")warnings[kind]=TredTime.rejectedByServer(kind,accepted,Date.now()/1000);
       }
     }
-    if(epoch===generation)await chrome.storage.local.set({lastError,needsPairing,timeWarnings:warnings,receivedKinds:[...received],...(lastSeen===null?{}:{lastSeen})});
+    if(epoch===generation)await chrome.storage.local.set({lastError,needsPairing,timeWarnings:warnings,receivedKinds:[...received],clockSamples,...(lastSeen===null?{}:{lastSeen})});
   }catch(error){
     if(epoch===generation)await chrome.storage.local.set({lastError:error.message.slice(0,200)});
   }finally{sending=false;if(queue.length)schedule();}
@@ -73,14 +82,22 @@ chrome.runtime.onMessage.addListener((message,sender,reply)=>{
       if(typeof result.token!=="string"||!/^[A-Za-z0-9_-]{32,100}$/.test(result.token))throw new Error("Сервер не подтвердил связь. Прежние настройки сохранены.");
       // A rejected claim preserves the previously stored binding.
       generation++;queue=[];
-      await chrome.storage.local.set({base,token:result.token,lastError:"",lastSeen:null,needsPairing:false,timeWarnings:{},receivedKinds:[]});
+      await chrome.storage.local.set({base,token:result.token,lastError:"",lastSeen:null,needsPairing:false,timeWarnings:{},receivedKinds:[],clockSamples:{}});
+      return {ok:true};
+    }
+    if(message.action==="market-clock"&&!sender.tab){
+      if(!["utc","po-utc2"].includes(message.profile))throw new Error("Неподдерживаемый формат времени.");
+      generation++;queue=[];
+      const stored=await chrome.storage.local.get(["timeWarnings","receivedKinds"]);
+      const timeWarnings=Object.fromEntries(Object.entries(stored.timeWarnings||{}).filter(([kind])=>!["quote","candle"].includes(kind)));
+      await chrome.storage.local.set({marketClock:message.profile,timeWarnings,clockSamples:{},receivedKinds:(stored.receivedKinds||[]).filter(kind=>!["quote","candle"].includes(kind))});
       return {ok:true};
     }
     if(message.action==="disconnect"&&!sender.tab){generation++;queue=[];await chrome.storage.local.clear();return {ok:true};}
     if(message.action==="status"&&!sender.tab){
-      const {base,token,lastError,lastSeen,needsPairing,timeWarnings,receivedKinds}=await chrome.storage.local.get(["base","token","lastError","lastSeen","needsPairing","timeWarnings","receivedKinds"]);
+      const {base,token,lastError,lastSeen,needsPairing,timeWarnings,receivedKinds,marketClock,clockSamples}=await chrome.storage.local.get(["base","token","lastError","lastSeen","needsPairing","timeWarnings","receivedKinds","marketClock","clockSamples"]);
       const diagnostic=Object.entries(timeWarnings||{}).filter(([kind,value])=>TredTime.kinds.includes(kind)&&typeof value==="string").map(([,value])=>value).join("\n");
-      return {worker_version:WORKER_VERSION,base,paired:!!(base&&token),needsPairing:!!needsPairing,lastError,lastSeen,diagnostic,receivedKinds:(receivedKinds||[]).filter(x=>TredTime.kinds.includes(x))};
+      return {worker_version:WORKER_VERSION,base,paired:!!(base&&token),needsPairing:!!needsPairing,lastError,lastSeen,diagnostic,receivedKinds:(receivedKinds||[]).filter(x=>TredTime.kinds.includes(x)),marketClock:TredTime.profile(marketClock),clockSamples:clockSamples||{}};
     }
     if(message.action==="events"&&sender.tab&&/^https:\/\/([a-z0-9-]+\.)*pocketoption\.com\//.test(sender.url||"")&&Array.isArray(message.events)){
       queue.push(...message.events.slice(0,250));queue=queue.slice(-1000);schedule();return {ok:true};

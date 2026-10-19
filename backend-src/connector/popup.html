@@ -1,1 +1,28 @@
-<!doctype html><html lang="ru"><meta charset="utf-8"><link rel="stylesheet" href="popup.css"><title>TRED · связь</title><h1>TRED <span>CONNECT</span></h1><p>Войди в Pocket Option самостоятельно. Модуль читает входящие данные; пароль не нужен.</p><p id="connection" role="status"></p><button id="reload-module" type="button" hidden>Перезапустить модуль</button><form id="form"><label>HTTPS-адрес TRED<input id="base" type="url" placeholder="https://…trycloudflare.com" required></label><label>Одноразовый код из кабинета<input id="code" minlength="24" maxlength="24" required autocomplete="off"></label><button>Связать кабинет</button><p id="pair-error" role="alert"></p></form><button id="change" type="button" hidden>Изменить подключение</button><p id="status" role="status"></p><p id="received"></p><pre id="diagnostic" hidden></pre><button id="disconnect" type="button" hidden>Отключить модуль</button><small id="module-version">Модуль 0.3.2</small><small>После подключения обнови вкладку Pocket Option. Держи компьютер, сервер и график открытыми. Часовой пояс меняет отображение часов; для сверки самих часов в Windows есть «Синхронизировать сейчас». Неподдерживаемые метки не исправляются автоматически.</small><script src="popup.js"></script></html>
+<!doctype html>
+<html lang="ru">
+<meta charset="utf-8">
+<link rel="stylesheet" href="popup.css">
+<title>TRED · связь</title>
+<h1>TRED <span>CONNECT</span></h1>
+<p>Войди в Pocket Option самостоятельно. Модуль читает входящие данные; пароль не нужен.</p>
+<p id="connection" role="status"></p>
+<button id="reload-module" type="button" hidden>Перезапустить модуль</button>
+<form id="form">
+  <label>HTTPS-адрес TRED<input id="base" type="url" placeholder="https://…trycloudflare.com" required></label>
+  <label>Одноразовый код из кабинета<input id="code" minlength="24" maxlength="24" required autocomplete="off"></label>
+  <button>Связать кабинет</button><p id="pair-error" role="alert"></p>
+</form>
+<button id="change" type="button" hidden>Изменить подключение</button>
+<p id="status" role="status"></p><p id="received"></p>
+<pre id="diagnostic" hidden></pre>
+<section id="market-time" hidden>
+  <p id="clock-status" role="status"></p>
+  <button id="clock-toggle" type="button">Использовать Pocket Option UTC+2</button>
+  <small>Если котировки опережают часы на 7200 секунд, выбери UTC+2. Это формат времени источника для котировок и свечей. Проверка свежести остаётся включённой.</small>
+  <p id="clock-error" role="alert"></p>
+</section>
+<button id="disconnect" type="button" hidden>Отключить модуль</button>
+<small id="module-version">Модуль 0.3.3</small>
+<small>После обновления модуля обнови вкладку Pocket Option. Держи компьютер, сервер и график открытыми. Если Windows показывает неверное время, используй «Синхронизировать сейчас» в настройках часов.</small>
+<script src="popup.js"></script>
+</html>

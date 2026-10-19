@@ -1,12 +1,12 @@
 "use strict";
 const $=s=>document.querySelector(s);
-let editing=false,hydrated=false,pairing=false;
-const UI_VERSION="0.3.2";
+let editing=false,hydrated=false,pairing=false,changingClock=false,marketClock="utc";
+const UI_VERSION="0.3.3";
 const labels={account:"баланс",asset:"каталог пар",quote:"котировки",candle:"свечи",trade:"сделки"};
 function outdated(){
   $("#connection").textContent="Окно обновилось, а фоновый модуль ещё работает в другой версии. Нажми «Перезапустить модуль», затем открой TRED снова.";
   $("#connection").className="";$("#reload-module").hidden=false;
-  for(const id of ["#form","#change","#disconnect","#diagnostic"])$(id).hidden=true;
+  for(const id of ["#form","#change","#disconnect","#diagnostic","#market-time"])$(id).hidden=true;
   $("#status").textContent="Настройки связи не удалены.";$("#received").textContent="";
 }
 async function status(){
@@ -25,7 +25,20 @@ async function status(){
   $("#received").textContent=s.paired&&s.receivedKinds?.length?"Сервер принял: "+s.receivedKinds.map(x=>labels[x]).filter(Boolean).join(", ")+".":"";
   $("#diagnostic").hidden=!s.paired||!s.diagnostic;
   $("#diagnostic").textContent=s.paired?s.diagnostic||"":"";
+  $("#market-time").hidden=!paired;
+  marketClock=s.marketClock==="po-utc2"?"po-utc2":"utc";
+  $("#clock-status").textContent=marketClock==="po-utc2"?"Время котировок и свечей: Pocket Option UTC+2 → UTC. Проверка свежести включена.":"Время котировок и свечей: UTC, без пересчёта.";
+  $("#clock-toggle").textContent=marketClock==="po-utc2"?"Вернуть формат UTC":"Использовать Pocket Option UTC+2";
 }
+$("#clock-toggle").addEventListener("click",async()=>{
+  if(changingClock)return;changingClock=true;$("#clock-toggle").disabled=true;$("#clock-error").textContent="";
+  try{
+    const result=await chrome.runtime.sendMessage({action:"market-clock",profile:marketClock==="po-utc2"?"utc":"po-utc2"});
+    if(result.error)$("#clock-error").textContent=result.error;
+    else await status();
+  }catch(_){outdated();}
+  finally{changingClock=false;$("#clock-toggle").disabled=false;}
+});
 $("#reload-module").addEventListener("click",()=>chrome.runtime.reload());
 $("#change").addEventListener("click",()=>{editing=true;$("#form").hidden=false;$("#change").hidden=true;});
 $("#form").addEventListener("submit",async e=>{

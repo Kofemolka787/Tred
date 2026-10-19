@@ -28,13 +28,15 @@
       }
     }
     if (name === "updateStream" && Array.isArray(data)) {
-      for (const row of data) if (Array.isArray(row) && safeSymbol(row[0]) && number(row[1]) && number(row[2]) && row[2] > 0) events.push({type:"quote",symbol:row[0],time:ts(row[1]),price:row[2]});
+      for (const row of data) if (Array.isArray(row) && safeSymbol(row[0]) && number(row[1]) && number(row[2]) && row[2] > 0) events.push({type:"quote",symbol:row[0],time:ts(row[1]),price:row[2],source_clock:"po-market-native-v1"});
     }
     if (["loadHistoryPeriod","updateHistoryNew","candles"].includes(name) && data && safeSymbol(data.asset) && [60,300,900].includes(data.period)) {
       const rows = data.candles || data.history || data.data;
       if (Array.isArray(rows)) for (const row of rows.slice(-200)) {
         const c = Array.isArray(row) ? {time:ts(row[0]),open:row[1],close:row[2],high:row[3],low:row[4]} : {time:ts(row.time),open:row.open,close:row.close,high:row.high,low:row.low};
-        if (Object.values(c).every(number) && c.time + data.period <= now) events.push({type:"candle",symbol:data.asset,period:data.period,...c});
+        // Closed-bar filtering happens in the worker after the selected source
+        // clock is decoded. A raw UTC+2 bar must not be compared with UTC here.
+        if (Object.values(c).every(number)) events.push({type:"candle",symbol:data.asset,period:data.period,...c,source_clock:"po-market-native-v1"});
       }
     }
     // This strict variant accepts only explicit complete trade records. Unknown

@@ -29,7 +29,7 @@ async function checks(){
   assert.equal(h.requests[2].body.events[0].time,now,"No timestamp rewriting");
   let status=await h.message({action:"status"});
   assert(status.paired&&!status.needsPairing&&status.lastSeen);
-  assert.equal(status.worker_version,"0.3.2");
+  assert.equal(status.worker_version,"0.3.3");
   assert.match(status.diagnostic,/quote|Котировка/);assert.match(status.diagnostic,/30 с/);
   assert(!JSON.stringify(status).includes(token));
   assert(!JSON.stringify(h.storage).includes('"balance"'));
@@ -79,7 +79,43 @@ async function checks(){
   await racing.message({action:"disconnect"});release(response(200,{ok:true}));await pending;
   assert.deepEqual(racing.storage,{});
   assert.equal((await h.message({action:"events",events:[quote]},{tab:{id:2},url:"https://evil.example/"})).error,"Действие недоступно.");
-  console.log(JSON.stringify({ok:true,worker_scenarios:11,timestamps_not_rewritten:true,bad_quote_does_not_block_account:true,failed_claim_preserves_binding:true,status_excludes_token:true,unknown_credential_fields_not_sent:true,late_response_after_disconnect_ignored:true,html_and_missing_token_keep_binding:true}));
+
+  const native={...quote,time:now+7200,source_clock:"po-market-native-v1"};
+  const clock=harness();await clock.events([native]);
+  assert.equal(clock.requests.length,0,"UTC+2 is never selected from an arriving timestamp");
+  assert.equal(clock.storage.marketClock,undefined);
+  assert.match((await clock.message({action:"status"})).diagnostic,/7200 с/);
+  assert((await clock.message({action:"market-clock",profile:"po-utc2"},sender)).error,"Page cannot select a clock profile");
+  assert((await clock.message({action:"market-clock",profile:"arbitrary-offset"})).error);
+  assert((await clock.message({action:"market-clock",profile:"po-utc2"})).ok);
+  await clock.events([native]);
+  assert.equal(clock.requests.length,1);
+  assert.equal(clock.requests[0].body.events[0].time,now);
+  assert(!Object.hasOwn(clock.requests[0].body.events[0],"source_clock"),"Unchanged backend receives canonical UTC fields only");
+  assert.deepEqual(copy(clock.storage.clockSamples.quote),{profile:"po-utc2",raw_time:now+7200,utc_time:now,offset_seconds:7200});
+  assert.equal(clock.storage.token,token,"Clock selection retains the existing binding");
+  assert.equal((await clock.message({action:"status"})).marketClock,"po-utc2");
+  await clock.events([{...native,time:now+7200-61},{...native,time:now+7200+30},{...native,time:now}]);
+  assert.equal(clock.requests.length,1,"Stale, future and already-decoded values are not freshened");
+  await clock.events([quote,{...native,source_clock:"unknown"},{...native,session:"fixture-clock-secret"}]);
+  assert.equal(clock.requests.length,1,"Legacy observer, unknown clock and credential fields fail closed");
+  const candle={type:"candle",symbol:"EURUSD",period:60,time:Math.floor(now/60)*60-60+7200,open:1.1,close:1.2,high:1.3,low:1.0,source_clock:"po-market-native-v1"};
+  await clock.events([candle,{...candle,time:candle.time+60}]);
+  assert.equal(clock.requests.length,2);
+  assert.equal(clock.requests[1].body.events.length,1,"Current candle is excluded after decoding");
+  assert.equal(clock.requests[1].body.events[0].time,candle.time-7200);
+  assert(!JSON.stringify(clock.storage).includes("fixture-clock-secret"));
+  assert(!JSON.stringify(clock.requests).includes("fixture-clock-secret"));
+  const trade={type:"trade",mode:"demo",account_id:"456",id:"fixture-trade",symbol:"EURUSD",direction:"up",stake:"1",opened_at:now,expires_at:now+300,status:"open",time:now};
+  await clock.events([account,asset,trade]);
+  assert.equal(clock.requests.length,5,"Source clock does not alter account, catalog or trades");
+  assert.equal(clock.requests[4].body.events[0].opened_at,now);
+  const resumed=harness(null,copy(clock.storage));await resumed.events([native]);
+  assert.equal(resumed.requests[0].body.events[0].time,now,"Explicit clock choice survives worker restart");
+  await clock.message({action:"market-clock",profile:"utc"});await clock.events([native,quote]);
+  assert.equal(clock.requests.at(-1).body.events[0].time,now,"Reverting to UTC is supported");
+  assert.equal(clock.storage.clockSamples.quote.offset_seconds,0);
+  console.log(JSON.stringify({ok:true,worker_scenarios:17,utc_timestamps_unchanged:true,bad_quote_does_not_block_account:true,failed_claim_preserves_binding:true,status_excludes_token:true,unknown_credential_fields_not_sent:true,late_response_after_disconnect_ignored:true,html_and_missing_token_keep_binding:true,explicit_po_utc2_profile:true,stale_and_future_still_rejected:true,closed_candles_decoded_before_filter:true,source_time_provenance_retained:true,no_arrival_time_calibration:true}));
 }
 async function realHttp(){
   const api=process.argv[process.argv.indexOf("--api")+1],fixtureToken=process.argv[process.argv.indexOf("--fixture-token")+1];
@@ -90,6 +126,13 @@ async function realHttp(){
   assert.equal(s.lastError,"");assert(s.paired&&s.lastSeen);
   assert.deepEqual(copy(s.receivedKinds),["account","asset","quote"]);
   assert.match(s.diagnostic,/30 с/);
-  console.log(JSON.stringify({ok:true,actual_backend_http:true,good_types_accepted:3,bad_future_quote_not_sent:true}));
+  assert((await h.message({action:"market-clock",profile:"po-utc2"})).ok);
+  const native={...quote,time:now+7200,source_clock:"po-market-native-v1"};
+  const candle={type:"candle",symbol:"EURUSD",period:60,time:Math.floor(now/60)*60-60+7200,open:1.1,close:1.2,high:1.3,low:1.0,source_clock:"po-market-native-v1"};
+  await h.events([native,{...native,time:now+7200+30},{...native,time:now+7200-61},candle,{...candle,time:candle.time+60}]);
+  const decoded=await h.message({action:"status"});
+  assert.equal(decoded.lastError,"");assert(decoded.receivedKinds.includes("quote")&&decoded.receivedKinds.includes("candle"));
+  assert.equal(h.requests.at(-2).body.events.length,1);assert.equal(h.requests.at(-1).body.events.length,1);
+  console.log(JSON.stringify({ok:true,actual_backend_http:true,good_types_accepted:4,bad_future_quote_not_sent:true,po_utc2_quote_and_closed_candle_accepted:true,stale_native_quote_not_sent:true}));
 }
 (process.argv.includes("--api")?realHttp():checks()).catch(error=>{console.error(error);process.exitCode=1;});
