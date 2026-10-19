@@ -1,6 +1,8 @@
 "use strict";
 // Observes INCOMING messages only. No send() call, login, cookie access or auth export.
 (() => {
+  if(window.__tredObserverVersion==="0.3.8")return;
+  window.__tredObserverVersion="0.3.8";
   const Native = window.WebSocket;
   const number = v => typeof v === "number" && Number.isFinite(v);
   const safeSymbol = v => typeof v === "string" && /^[A-Za-z0-9][A-Za-z0-9_./ #-]{1,31}$/.test(v);
@@ -48,11 +50,12 @@
       const keepPrimary=name!=="successauth"&&["uid","opaque-uid","ambiguous-account"].includes(state.idField)&&!accountId(data.uid)&&["none","empty","zero"].includes(incoming.shape.uid);
       if (name === "successauth" || incoming.present&&!keepPrimary) {
         if (name === "successauth" || incoming.fingerprint !== state.idFingerprint) {
-          state.stream=crypto.randomUUID();state.currencies={};state.account=null;
+          state.stream=crypto.randomUUID();state.currencies={};state.account=null;state.mode=null;
         }
         state.uid=incoming.uid;state.idStatus=incoming.status;state.idField=incoming.field;state.idFingerprint=incoming.fingerprint;state.idShape=incoming.shape;state.sourceAccount=incoming.sourceAccount??null;
       }
-      const mode = [0,1,false,true].includes(data.isDemo) ? data.isDemo === 1 || data.isDemo === true ? "demo" : "real" : null;
+      if(Object.hasOwn(data,"isDemo"))state.mode=[0,1,false,true].includes(data.isDemo)?data.isDemo===1||data.isDemo===true?"demo":"real":null;
+      const mode=state.mode??null;
       if (mode && Object.hasOwn(data,"currency")) state.currencies[mode] = currency(data.currency);
       const unit = Object.hasOwn(data,"currency") ? currency(data.currency) : mode ? state.currencies[mode] ?? null : null;
       state.account = state.uid && mode ? {account_id:state.uid,mode,currency:unit} : null;

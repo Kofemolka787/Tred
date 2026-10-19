@@ -28,12 +28,13 @@ globalThis.TredAccount = (() => {
     return null;
   }
   function resolve(event,bindings,remembered=[]){
-    const {source_stream,id_status,id_shape,source_account,...canonical}=event;
+    const {source_stream,id_status,id_shape,source_account,account_source,...canonical}=event;
+    if(account_source!==undefined&&account_source!=="terminal-dom")return {error:"Неизвестный источник баланса."};
     if(source_account!=null&&!sourceAccount(source_account))return {error:"Неподдерживаемый признак аккаунта. Обнови вкладку Pocket Option."};
     if(source_stream!==undefined&&!stream(source_stream)||id_status!==undefined&&![...manualStatuses,"present","invalid","conflict"].includes(id_status)||id_shape!==undefined&&!validShape(id_shape))return {error:"Неподдерживаемые метаданные счёта. Обнови вкладку Pocket Option."};
     if(["invalid","conflict"].includes(id_status))return {error:"Вкладка ещё использует прежний обработчик ID. Обнови график Pocket Option после обновления модуля."};
     const error=basic(canonical);if(error)return {error};
-    if(id(canonical.account_id))return {event:canonical};
+    if(id(canonical.account_id))return {event:canonical,...(account_source==="terminal-dom"?{manual:true,source_stream,origin:"terminal-dom"}:{})};
     if(manualStatuses.includes(id_status)&&stream(source_stream)){
       const selected=identities(bindings).find(x=>streamKey(x)===streamKey(event));
       const profile=profiles(remembered).find(x=>x.mode===event.mode&&(x.source_account==null||x.source_account===source_account));

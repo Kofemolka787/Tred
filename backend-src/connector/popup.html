@@ -14,6 +14,8 @@
 </form>
 <button id="change" type="button" hidden>Изменить подключение</button>
 <p id="status" role="status"></p><p id="received"></p>
+<p id="balance-delivery" role="status"></p>
+<small id="terminal-reader-status"></small>
 <pre id="diagnostic" hidden></pre>
 <p id="identity-tab-help" hidden>Для подтверждения Pocket ID открой это расширение прямо на вкладке с нужным графиком Pocket Option.</p>
 <section id="manual-identity" hidden>
@@ -30,7 +32,7 @@
 </section>
 <p id="manual-id-status" hidden></p>
 <button id="forget-account-id" type="button" hidden>Сменить Pocket ID</button>
-<small id="auto-refresh-status" hidden>Автообновление включено. Новые данные передаются сразу; проверка доставки — каждые 15 секунд. Окно расширения можно закрыть.</small>
+<small id="auto-refresh-status" hidden>Изменения видимого баланса отслеживаются автоматически; контрольная проверка — каждые 5 секунд. Окно расширения можно закрыть.</small>
 <section id="account-currency" hidden>
   <p id="account-identity"></p>
   <p id="currency-status" role="status"></p>
@@ -46,7 +48,7 @@
   <p id="clock-error" role="alert"></p>
 </section>
 <button id="disconnect" type="button" hidden>Отключить модуль</button>
-<small id="module-version">Модуль 0.3.7</small>
+<small id="module-version">Модуль 0.3.8</small>
 <small>После обновления модуля обнови вкладку Pocket Option. Держи компьютер, сервер и график открытыми. Если Windows показывает неверное время, используй «Синхронизировать сейчас» в настройках часов.</small>
 <script src="popup.js"></script>
 </html>

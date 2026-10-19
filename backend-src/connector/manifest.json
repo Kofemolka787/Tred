@@ -1,14 +1,45 @@
 {
   "manifest_version": 3,
   "name": "TRED · связь с Pocket Option",
-  "version": "0.3.7",
+  "version": "0.3.8",
   "description": "Передаёт выбранные данные открытого Pocket Option в ваш TRED. Торговых команд нет.",
-  "permissions": ["storage"],
-  "host_permissions": ["https://*.trycloudflare.com/*"],
-  "background": {"service_worker": "worker.js"},
-  "action": {"default_popup": "popup.html"},
+  "permissions": [
+    "storage",
+    "scripting"
+  ],
+  "host_permissions": [
+    "https://*.trycloudflare.com/*",
+    "https://pocketoption.com/*",
+    "https://*.pocketoption.com/*"
+  ],
+  "background": {
+    "service_worker": "worker.js"
+  },
+  "action": {
+    "default_popup": "popup.html"
+  },
   "content_scripts": [
-    {"matches": ["https://pocketoption.com/*", "https://*.pocketoption.com/*"], "js": ["observer.js"], "run_at": "document_start", "world": "MAIN"},
-    {"matches": ["https://pocketoption.com/*", "https://*.pocketoption.com/*"], "js": ["relay.js"], "run_at": "document_start"}
+    {
+      "matches": [
+        "https://pocketoption.com/*",
+        "https://*.pocketoption.com/*"
+      ],
+      "js": [
+        "observer.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://pocketoption.com/*",
+        "https://*.pocketoption.com/*"
+      ],
+      "js": [
+        "balance-read.js",
+        "relay.js"
+      ],
+      "run_at": "document_start"
+    }
   ]
 }

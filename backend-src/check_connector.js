@@ -54,7 +54,7 @@ setImmediate(async()=>{
   assert.equal(at('12.35').currency,"USD","Explicit unframed broker balance is supported");
   assert.equal(at('44').account_id,"999");assert.equal(at('44').currency,null,"Currency is reset on account change");
   assert.equal(at('45').mode,"real");assert.equal(at('45').currency,null,"Currency is not inherited across modes");
-  assert.equal(at('20').mode,null,"Mode must be explicit on a balance event");
+  assert.equal(at('20').mode,'demo',"A balance delta retains the explicit mode of the same authenticated socket");
   assert.equal(at('110').account_id,"456");assert.equal(at('110').currency,"USD");
   assert(!JSON.stringify(forwarded).includes("fixture-secret"));assert.equal(sent.length,0);
   forwarded=[];
@@ -110,5 +110,5 @@ setImmediate(async()=>{
   assert(resumed.every(x=>x.source_account===key),'Account identity survives socket reconnect and repeated auth');
   assert.equal(resumed.at(-1).balance,'109');assert.equal(sent.length,0);
   assert(!JSON.stringify(forwarded).includes('opaque-user'));
-  console.log(JSON.stringify({ok:true,fixture_protocol:true,auth_fields_not_exported:true,no_outbound_commands:true,binary_quotes_decoded:true,incomplete_settlements_ignored:true,source_clock_tagged_without_timestamp_changes:true,account_identity_scoped_to_socket:true,split_metadata_and_unframed_balance:true,missing_currency_and_mode_not_guessed:true,primary_uid_not_compared_with_secondary_ids:true,empty_uid_keeps_authenticated_identity:true,unsupported_id_shape_has_no_raw_values:true,changed_opaque_id_rotates_context:true,reauth_rotates_stream_but_retains_account_identity:true}));
+  console.log(JSON.stringify({ok:true,fixture_protocol:true,auth_fields_not_exported:true,no_outbound_commands:true,binary_quotes_decoded:true,incomplete_settlements_ignored:true,source_clock_tagged_without_timestamp_changes:true,account_identity_scoped_to_socket:true,split_metadata_and_unframed_balance:true,missing_currency_not_guessed_and_mode_scoped_to_socket:true,primary_uid_not_compared_with_secondary_ids:true,empty_uid_keeps_authenticated_identity:true,unsupported_id_shape_has_no_raw_values:true,changed_opaque_id_rotates_context:true,reauth_rotates_stream_but_retains_account_identity:true}));
 });

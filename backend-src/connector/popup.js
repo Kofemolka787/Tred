@@ -3,13 +3,14 @@ const $=s=>document.querySelector(s);
 let editing=false,hydrated=false,pairing=false,changingClock=false,marketClock="utc",accountTarget=null,confirmingCurrency=false;
 let identityTarget=null,identityFormKey=null,confirmingIdentity=false;
 let activeTabId=null;
-const UI_VERSION="0.3.7";
+const UI_VERSION="0.3.8";
 const labels={account:"баланс",asset:"каталог пар",quote:"котировки",candle:"свечи",trade:"сделки"};
 function outdated(){
   $("#connection").textContent="Окно обновилось, а фоновый модуль ещё работает в другой версии. Нажми «Перезапустить модуль», затем открой TRED снова.";
   $("#connection").className="";$("#reload-module").hidden=false;
   for(const id of ["#form","#change","#disconnect","#diagnostic","#market-time","#account-currency","#manual-identity","#manual-id-status","#identity-tab-help","#forget-account-id","#auto-refresh-status"])$(id).hidden=true;
   $("#status").textContent="Настройки связи не удалены.";$("#received").textContent="";
+  $("#balance-delivery").textContent="";$("#terminal-reader-status").textContent="";
 }
 async function status(){
   let s;
@@ -28,6 +29,8 @@ async function status(){
   if(!hydrated){$("#base").value=s.base||"";hydrated=true;}
   $("#status").textContent=!s.paired?"Передача данных начнётся после привязки.":s.lastError?"Передача данных: "+s.lastError:s.lastSeen?"Последняя передача принята сервером: "+new Date(s.lastSeen).toLocaleTimeString():paired?"Ожидаем поддерживаемые события. Обнови график Pocket Option.":"";
   $("#received").textContent=s.paired&&s.receivedKinds?.length?"Сервер принял: "+s.receivedKinds.map(x=>labels[x]).filter(Boolean).join(", ")+".":"";
+  $("#balance-delivery").textContent=s.paired&&s.lastBalance?"Последний баланс принят: "+new Date(s.lastBalance.received_at).toLocaleTimeString()+" · "+(s.lastBalance.mode==="demo"?"демосчёт":"реальный счёт"):"";
+  $("#terminal-reader-status").textContent=!paired?"":s.terminalCode==="ready"?"Видимый баланс терминала распознан.":s.terminalCode?"Блок баланса пока не распознан. Передача поддерживаемых событий Pocket продолжается.":"Подключаем чтение открытого терминала…";
   $("#diagnostic").hidden=!s.paired||!s.diagnostic;
   $("#diagnostic").textContent=s.paired?s.diagnostic||"":"";
   $("#market-time").hidden=!paired;

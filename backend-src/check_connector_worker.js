@@ -9,9 +9,9 @@ const copy=x=>JSON.parse(JSON.stringify(x));
 const account={type:"account",mode:"demo",account_id:"456",currency:"USD",balance:"100.00",time:now};
 const asset={type:"asset",symbol:"EURUSD",market:"normal",is_open:true,payout:.8,expiries:[5],time:now};
 const quote={type:"quote",symbol:"EURUSD",price:1.1,time:now};
-function harness(fetcher,initial={}){
+function harness(fetcher,initial={},liveClock=false){
   const storage={base,token,...initial},requests=[];let listener,clockMillis=now*1000;
-  const context={URL,Date:class extends Date{static now(){return clockMillis;}},AbortSignal,console,setTimeout:()=>1,
+  const context={URL,Date:class extends Date{static now(){return liveClock?Date.now():clockMillis;}},AbortSignal,console,setTimeout:()=>1,
     chrome:{storage:{local:{setAccessLevel:()=>{},get:async keys=>Object.fromEntries(keys.map(k=>[k,storage[k]])),set:async value=>Object.assign(storage,value),clear:async()=>{for(const k in storage)delete storage[k];}}},runtime:{onMessage:{addListener:fn=>listener=fn}}},
     fetch:async(url,options)=>{requests.push({url,options,body:JSON.parse(options.body)});return fetcher?fetcher(url,options):response(200,{ok:true});}
   };
@@ -29,7 +29,7 @@ async function checks(){
   assert.equal(h.requests[2].body.events[0].time,now,"No timestamp rewriting");
   let status=await h.message({action:"status"});
   assert(status.paired&&!status.needsPairing&&status.lastSeen);
-  assert.equal(status.worker_version,"0.3.7");
+  assert.equal(status.worker_version,"0.3.8");
   assert.match(status.diagnostic,/quote|Котировка/);assert.match(status.diagnostic,/30 с/);
   assert(!JSON.stringify(status).includes(token));
   assert(!JSON.stringify(h.storage).includes('"balance"'));
@@ -258,10 +258,35 @@ async function checks(){
   aged.advance(61);await aged.message({action:"sync"},sender);assert.equal(aged.requests.length,1,"Expired retries are discarded");
   const forbidden=harness(()=>response(401,{message:"Expired fixture binding"}));await forbidden.events([account]);
   forbidden.advance(15);await forbidden.message({action:"sync"},sender);assert.equal(forbidden.requests.length,1,"Rejected pairing cannot be revived by a heartbeat");
-  let heartbeat,heartbeatCount=0;
-  vm.runInNewContext(fs.readFileSync("connector/relay.js","utf8"),{window:{addEventListener:()=>{}},setInterval:(callback,interval)=>{assert.equal(interval,15000);heartbeat=callback;},chrome:{runtime:{sendMessage:async message=>{assert.equal(message.action,"sync");heartbeatCount++;return {ok:true};}}}});
-  await heartbeat();assert.equal(heartbeatCount,1,"The open terminal schedules delivery checks independently of the popup");
-  console.log(JSON.stringify({ok:true,worker_scenarios:46,utc_timestamps_unchanged:true,bad_quote_does_not_block_account:true,failed_claim_preserves_binding:true,status_excludes_token:true,unknown_credential_fields_not_sent:true,late_response_after_disconnect_ignored:true,html_and_missing_token_keep_binding:true,explicit_po_utc2_profile:true,stale_and_future_still_rejected:true,closed_candles_decoded_before_filter:true,source_time_provenance_retained:true,no_arrival_time_calibration:true,usd_requires_confirmation_when_missing:true,confirmation_scoped_to_account_and_mode:true,explicit_other_currency_cannot_be_overridden:true,currency_confirmation_does_not_replay_balance:true,manual_profile_scoped_to_mode_and_known_source:true,fresh_pending_balance_keeps_original_time:true,pending_balance_not_persisted:true,broker_identity_not_overridden:true,unknown_id_requires_explicit_scoped_confirmation:true,schema_diagnostics_exclude_raw_ids:true,zero_id_rejected:true,balance_changes_without_reconfirmation:true,profile_survives_reconnect_and_restart:true,legacy_confirmation_migrated:true,different_source_requires_confirmation:true,delivery_retry_15s_without_freshening:true}));
+  let relayCallback,relayRemoved=0,cleared=0;
+  const relayContext={window:{addEventListener:(_name,fn)=>relayCallback=fn,removeEventListener:()=>relayRemoved++},document:{documentElement:{}},MutationObserver:class{observe(){}disconnect(){}},TredTerminalBalance:{read:()=>({code:"header_not_found"})},setInterval:(_callback,interval)=>{assert.equal(interval,5000);return 1;},clearInterval:()=>cleared++,setTimeout,clearTimeout,chrome:{runtime:{id:"fixture",sendMessage:()=>{throw Error("Extension context invalidated.");}}}};
+  vm.createContext(relayContext);vm.runInContext(fs.readFileSync("connector/relay.js","utf8"),relayContext);
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(relayRemoved,1);assert.equal(cleared,1,"Synchronous invalidation stops the dead relay without an unhandled rejection");
+  relayContext.chrome.runtime.sendMessage=async()=>({ok:true});
+  vm.runInContext(fs.readFileSync("connector/relay.js","utf8"),relayContext);
+  assert(relayContext.__tredRelay.active,"A disposed relay can be restored in the same open page");
+  const attached=harness();let injections=[];
+  attached.context.chrome.tabs={query:async()=>[{id:1,url:sender.url},{id:2,url:"https://evil.example/ru/cabinet/"}]};
+  attached.context.chrome.scripting={executeScript:async options=>injections.push(options)};
+  await vm.runInContext("attachOpenTerminals()",attached.context);
+  assert.equal(injections.length,2);assert.deepEqual(copy(injections[1].files),["balance-read.js","relay.js"]);
+  assert(injections.every(x=>x.target.tabId===1),"Restore only the owner's Pocket terminal without navigating it");
+  const displayed=harness(null,{accountProfiles:[{account_id:"456",mode:"demo",source_account:sourceA}]});
+  const snapshot={mode:"demo",currency:"USD",balance:"205.20",time:now};
+  assert((await displayed.message({action:"terminal-balance",snapshot},sender)).ok);
+  await vm.runInContext("flush()",displayed.context);
+  assert.equal(displayed.requests[0].body.events[0].balance,"205.20");
+  assert(!Object.hasOwn(displayed.requests[0].body.events[0],"account_source"));
+  assert.equal(displayed.storage.accountCandidate.identity_source,"manual");
+  assert.equal(displayed.storage.lastBalance.origin,"terminal-dom");
+  assert(!JSON.stringify(displayed.storage).includes('"balance"'),"No screen amount persists in Chrome storage");
+  await displayed.events([{...identifiedSource,source_account:sourceB}]);
+  assert.equal((await displayed.message({action:"terminal-balance",snapshot},sender)).ok,false,"A known different account blocks screen fallback");
+  assert((await displayed.message({action:"terminal-balance",snapshot:{...snapshot,mode:"real"}},sender)).ok===false);
+  assert((await displayed.message({action:"terminal-balance",snapshot:{...snapshot,currency:"EUR"}},sender)).error);
+  assert((await displayed.message({action:"terminal-balance",snapshot:{...snapshot,time:now-61}},sender)).error);
+  console.log(JSON.stringify({ok:true,worker_scenarios:51,utc_timestamps_unchanged:true,bad_quote_does_not_block_account:true,failed_claim_preserves_binding:true,status_excludes_token:true,unknown_credential_fields_not_sent:true,late_response_after_disconnect_ignored:true,html_and_missing_token_keep_binding:true,explicit_po_utc2_profile:true,stale_and_future_still_rejected:true,closed_candles_decoded_before_filter:true,source_time_provenance_retained:true,no_arrival_time_calibration:true,usd_requires_confirmation_when_missing:true,confirmation_scoped_to_account_and_mode:true,explicit_other_currency_cannot_be_overridden:true,currency_confirmation_does_not_replay_balance:true,manual_profile_scoped_to_mode_and_known_source:true,fresh_pending_balance_keeps_original_time:true,pending_balance_not_persisted:true,broker_identity_not_overridden:true,unknown_id_requires_explicit_scoped_confirmation:true,schema_diagnostics_exclude_raw_ids:true,zero_id_rejected:true,balance_changes_without_reconfirmation:true,profile_survives_reconnect_and_restart:true,legacy_confirmation_migrated:true,different_source_requires_confirmation:true,delivery_retry_without_freshening:true,synchronous_context_invalidation_handled:true,collector_restored_without_page_reload:true,visible_balance_uses_configured_account:true}));
 }
 async function realHttp(){
   const api=process.argv[process.argv.indexOf("--api")+1],fixtureToken=process.argv[process.argv.indexOf("--fixture-token")+1];
@@ -295,4 +320,17 @@ async function realHttp(){
   assert.equal(restored.requests.length,1,"Another account is held, not merged into the owner's balance");
   console.log(JSON.stringify({ok:true,actual_backend_http:true,good_types_accepted:4,bad_future_quote_not_sent:true,po_utc2_quote_and_closed_candle_accepted:true,stale_native_quote_not_sent:true,unknown_identity_and_missing_currency_held_until_scoped_confirmation:true,balance_5_to_100_to_108_without_another_confirmation:true}));
 }
-(process.argv.includes("--api")?realHttp():checks()).catch(error=>{console.error(error);process.exitCode=1;});
+async function bridge(){
+  const api=process.argv[process.argv.indexOf("--bridge")+1],fixtureToken=process.argv[process.argv.indexOf("--fixture-token")+1];
+  assert(/^http:\/\/127\.0\.0\.1:\d+$/.test(api));
+  const h=harness((url,options)=>fetch(url.replace(base,api),options),{token:fixtureToken,accountProfiles:[{account_id:"456",mode:"demo",source_account:null}],confirmedUsdAccounts:["456:demo"]},true);
+  const input=require("node:readline").createInterface({input:process.stdin});
+  process.stdout.write(JSON.stringify({ready:true})+"\n");
+  for await(const line of input){
+    const request=JSON.parse(line);
+    const result=await h.message(request.message,request.message.action==="status"?{}:sender);
+    await vm.runInContext("flush()",h.context);
+    process.stdout.write(JSON.stringify({id:request.id,result})+"\n");
+  }
+}
+(process.argv.includes("--bridge")?bridge():process.argv.includes("--api")?realHttp():checks()).catch(error=>{console.error(error);process.exitCode=1;});
