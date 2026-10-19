@@ -76,7 +76,7 @@ function render() {
   text("#trade-rate", rate);
   text("#profile-id", String(user.id));
   text("#profile-name", user.first_name || "Гость");
-  text("#storage-note", current.persistent === false ? "Настройки доступны до закрытия приложения." : "Настройки сохраняются на этом устройстве.");
+  text("#storage-note",dataClient?.sync?.message||(current.persistent===false?"Настройки доступны до закрытия приложения.":"Настройки сохраняются на этом устройстве."));
   renderAccount();
   renderGoal();
   renderTrades();
@@ -220,11 +220,13 @@ async function bootstrap() {
   try {
     dataClient = await window.TredData.create(telegram);
     if (dataClient.mode === "api" && !telegram?.initData) throw new Error("Открой приложение из Telegram для личных настроек.");
-    current = await api("/api/state");
+    current = dataClient.initialState || await api("/api/state");
+    delete dataClient.initialState;
     authorized = true;
     render();
   } catch (error) {
     dataClient = window.TredData.deviceClient(telegram);
+    dataClient.sync={state:"error",message:error.message||"Не удалось получить сохранённое подключение. Повторим автоматически."};
     current = await dataClient.request("/api/state");
     authorized = true;
     render();
@@ -233,16 +235,36 @@ async function bootstrap() {
   } finally { setBusy(false); }
 }
 bootstrap();
-setInterval(async () => {
-  if (!authorized || busy || document.hidden || current?.mode === "device") return;
-  try { current = await api("/api/state"); refreshFailed=false; $("#notice").hidden=true; render(); }
+let refreshing=false;
+async function refreshAccount(forceCloud=false){
+  if(!authorized||busy||document.hidden||refreshing)return;
+  refreshing=true;
+  const client=dataClient,sequence=connectGeneration;
+  try {
+    const restored=await client.checkCloud?.(forceCloud);
+    if(client!==dataClient||sequence!==connectGeneration)return;
+    if(restored){
+      await restored.commit?.();
+      if(client!==dataClient||sequence!==connectGeneration)return;
+      clearPair();dataClient=restored.client;current=restored.state;
+    }else if(current?.mode!=="device"){
+      const state=await client.request("/api/state");
+      if(client!==dataClient||sequence!==connectGeneration)return;
+      current=state;
+    }
+    refreshFailed=false;$("#notice").hidden=true;render();
+  }
   catch (error) {
+    if(client!==dataClient||sequence!==connectGeneration)return;
     current.stale=true; current.connection.live=false; render();
     $("#notice").hidden=false; text("#notice","Нет связи с сервером. Показаны последние полученные данные. Управление симуляцией недоступно.");
     if (!refreshFailed) notify(error.message || "Не удалось обновить статус.");
     refreshFailed=true;
   }
-}, 2000);
+  finally{refreshing=false;}
+}
+setInterval(()=>refreshAccount(),2000);
+document.addEventListener("visibilitychange",()=>{if(!document.hidden)void refreshAccount(true);});
 
 $("#edit-goal").addEventListener("click", () => {
   const c=current?.risk?.config || {daily_loss:10,daily_target:20,balance_floor:90,stake:1,max_open:1,goal_start:100,goal_target:1000};
@@ -320,7 +342,8 @@ $("#backend-form").addEventListener("submit",async e => {
   try {
     const result=await window.TredData.connect(telegram,$("#backend-url").value.trim(),{persist:false});
     if(sequence!==connectGeneration)return;
-    result.commit?.();
+    await result.commit?.();
+    if(sequence!==connectGeneration)return;
     dataClient=result.client; current=result.state; authorized=true; render(); setBusy(false);
     text("#connect-status","Сервер подключён. Вставь адрес и код в модуль браузера."); await pair();
   } catch(error) { if(sequence===connectGeneration)text("#connect-status",error.message || "Нет связи с сервером."); }
