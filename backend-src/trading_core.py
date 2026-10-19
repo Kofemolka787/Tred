@@ -407,6 +407,8 @@ class Ledger(SignalSessions):
             outcomes = {r[0]:r[1] for r in db.execute("SELECT status,count(*) FROM manual_trades WHERE user_id=? GROUP BY status", (uid,))}
             rows = db.execute("SELECT created_at,result FROM analysis WHERE user_id=? ORDER BY id DESC LIMIT 10", (uid,)).fetchall()
             recent = [{"created_at":r[0], **json.loads(r[1]), "expiry":json.loads(r[1]).get("expiry",prefs["expiry"])} for r in rows]
+            for request in recent:
+                request.pop("candles", None)  # Candle chart is sent once by /api/signal.
             wins, losses = outcomes.get("win",0), outcomes.get("loss",0)
             paired = db.execute("SELECT 1 FROM pairing WHERE user_id=? AND token_hash IS NOT NULL AND token_expires>?", (uid,now)).fetchone() is not None
             live = bool(db.execute("SELECT 1 FROM assets WHERE user_id=? AND quote_time>?", (uid,now-10)).fetchone())

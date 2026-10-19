@@ -72,6 +72,8 @@ class SignalSessions:
             item = dict(row)
             item.pop("user_id")
             item["setup"] = json.loads(item.pop("evidence"))
+            # Polls need the explanation and live path, not repeated pre-entry OHLC.
+            item["setup"].pop("candles", None)
             quote = db.execute("SELECT price,quote_time FROM assets WHERE user_id=? AND symbol=?", (uid, row["symbol"])).fetchone()
             item["current_price"] = quote[0] if quote else None
             item["quote_time"] = quote[1] if quote else None

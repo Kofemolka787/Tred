@@ -29,6 +29,8 @@ class SignalSessionTests(unittest.TestCase):
         s=self.ledger.signal(101)
         self.assertEqual(s["status"],"candidate",s)
         self.assertIsNone(s["probability"])
+        self.assertTrue(s["candles"])
+        self.assertNotIn("candles",self.ledger.state(self.user)["recent_requests"][0])
         return s
 
     def test_full_lifecycle_is_persistent_idempotent_and_user_scoped(self):
@@ -43,6 +45,7 @@ class SignalSessionTests(unittest.TestCase):
         self.ingest({"type":"quote","symbol":"EURUSD_otc","time":self.now,"price":106.33})
         session=self.ledger.state(self.user)["signal_sessions"][0]
         self.assertEqual(session["current_price"],106.33)
+        self.assertNotIn("candles",session["setup"])
         self.assertEqual(session["status"],"open")
         self.assertTrue(session["live"])
         self.assertTrue(session["series"])
