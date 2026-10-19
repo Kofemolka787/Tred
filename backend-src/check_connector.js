@@ -98,5 +98,17 @@ setImmediate(async()=>{
   assert.notEqual(frame('46').source_stream,frame('47').source_stream,'Changed opaque identifier cannot inherit manual confirmation');
   assert.equal(frame('48').id_status,'ambiguous');assert.equal(frame('48').account_id,null);
   assert(!JSON.stringify(forwarded).includes('opaque-user'));assert(!JSON.stringify(forwarded).includes('opaque-wallet'));
-  console.log(JSON.stringify({ok:true,fixture_protocol:true,auth_fields_not_exported:true,no_outbound_commands:true,binary_quotes_decoded:true,incomplete_settlements_ignored:true,source_clock_tagged_without_timestamp_changes:true,account_identity_scoped_to_socket:true,split_metadata_and_unframed_balance:true,missing_currency_and_mode_not_guessed:true,primary_uid_not_compared_with_secondary_ids:true,empty_uid_keeps_authenticated_identity:true,unsupported_id_shape_has_no_raw_values:true,changed_opaque_id_rotates_context:true,reauth_rotates_confirmation_context:true}));
+  const key=frame('45').source_account;
+  assert(/^po1:[a-f0-9]{64}$/.test(key));assert.equal(frame('46').source_account,key);
+  assert.notEqual(frame('47').source_account,key);
+  forwarded=[];
+  const reconnect=new sandbox.window.WebSocket('wss://demo-api-eu.po.market/socket.io/');
+  await reconnect.emit('42["successauth",{"uid":"opaque-user-A-never-forward","isDemo":1,"currency":"USD","balance":105}]');
+  await reconnect.emit('42["successupdateBalance",{"balance":108,"isDemo":1}]');
+  await reconnect.emit('42["successauth",{"uid":"opaque-user-A-never-forward","id":false,"isDemo":1,"currency":"USD","balance":109}]');
+  const resumed=forwarded.flatMap(x=>x.events);
+  assert(resumed.every(x=>x.source_account===key),'Account identity survives socket reconnect and repeated auth');
+  assert.equal(resumed.at(-1).balance,'109');assert.equal(sent.length,0);
+  assert(!JSON.stringify(forwarded).includes('opaque-user'));
+  console.log(JSON.stringify({ok:true,fixture_protocol:true,auth_fields_not_exported:true,no_outbound_commands:true,binary_quotes_decoded:true,incomplete_settlements_ignored:true,source_clock_tagged_without_timestamp_changes:true,account_identity_scoped_to_socket:true,split_metadata_and_unframed_balance:true,missing_currency_and_mode_not_guessed:true,primary_uid_not_compared_with_secondary_ids:true,empty_uid_keeps_authenticated_identity:true,unsupported_id_shape_has_no_raw_values:true,changed_opaque_id_rotates_context:true,reauth_rotates_stream_but_retains_account_identity:true}));
 });

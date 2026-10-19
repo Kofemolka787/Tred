@@ -3,12 +3,12 @@ const $=s=>document.querySelector(s);
 let editing=false,hydrated=false,pairing=false,changingClock=false,marketClock="utc",accountTarget=null,confirmingCurrency=false;
 let identityTarget=null,identityFormKey=null,confirmingIdentity=false;
 let activeTabId=null;
-const UI_VERSION="0.3.6";
+const UI_VERSION="0.3.7";
 const labels={account:"баланс",asset:"каталог пар",quote:"котировки",candle:"свечи",trade:"сделки"};
 function outdated(){
   $("#connection").textContent="Окно обновилось, а фоновый модуль ещё работает в другой версии. Нажми «Перезапустить модуль», затем открой TRED снова.";
   $("#connection").className="";$("#reload-module").hidden=false;
-  for(const id of ["#form","#change","#disconnect","#diagnostic","#market-time","#account-currency","#manual-identity","#manual-id-status","#identity-tab-help"])$(id).hidden=true;
+  for(const id of ["#form","#change","#disconnect","#diagnostic","#market-time","#account-currency","#manual-identity","#manual-id-status","#identity-tab-help","#forget-account-id","#auto-refresh-status"])$(id).hidden=true;
   $("#status").textContent="Настройки связи не удалены.";$("#received").textContent="";
 }
 async function status(){
@@ -56,8 +56,16 @@ async function status(){
   }
   const manual=paired&&accountTarget?.identity_source==="manual";
   $("#manual-id-status").hidden=!manual;
-  $("#manual-id-status").textContent=manual?`Pocket ID ${accountTarget.account_id} подтверждён тобой для этого графика.`:"";
+  $("#manual-id-status").textContent=manual?`Pocket ID ${accountTarget.account_id} сохранён тобой · ${accountTarget.mode==="demo"?"демосчёт":"реальный счёт"}. Повторное подтверждение при обновлении баланса не нужно. Для другого Pocket-аккаунта нажми «Сменить Pocket ID».`:"";
+  $("#forget-account-id").hidden=!manual;
+  $("#auto-refresh-status").hidden=!paired;
 }
+$("#forget-account-id").addEventListener("click",async()=>{
+  if(!accountTarget)return;
+  const result=await chrome.runtime.sendMessage({action:"forget-account-id",account_id:accountTarget.account_id,mode:accountTarget.mode});
+  if(result.error)$("#status").textContent=result.error;
+  else await status();
+});
 $("#identity-form").addEventListener("submit",async event=>{
   event.preventDefault();if(confirmingIdentity||!identityTarget)return;
   confirmingIdentity=true;const target={...identityTarget};$("#identity-form button").disabled=true;$("#identity-error").textContent="";
@@ -75,7 +83,7 @@ async function currencyAction(action){
   try{
     const result=await chrome.runtime.sendMessage({action,account_id:target.account_id,mode:target.mode});
     if(result.error)$("#currency-error").textContent=result.error;
-    else{await status();$("#currency-error").textContent=action==="confirm-usd"?"Теперь обнови вкладку Pocket Option с графиком.":"Подтверждение отменено.";}
+    else{await status();$("#currency-error").textContent=action==="confirm-usd"?"USD сохранён. Следующее изменение баланса передастся автоматически.":"Подтверждение отменено.";}
   }catch(_){outdated();}
   finally{confirmingCurrency=false;$("#confirm-usd").disabled=false;$("#forget-usd").disabled=false;}
 }

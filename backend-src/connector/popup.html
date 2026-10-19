@@ -25,16 +25,18 @@
     <label id="identity-usd-label" class="check-label"><input id="identity-usd" type="checkbox">Этот счёт в USD — подтверждаю</label>
     <button>Подтвердить счёт</button>
   </form>
-  <small>Подтверждение действует для этого открытого графика. После его перезагрузки или нового входа проверь и подтверди номер снова, если Pocket не передаст ID.</small>
+  <small>Номер сохраняется в этом браузере для выбранного режима. Новые изменения баланса передаются автоматически. При входе в другой Pocket-аккаунт смени сохранённый ID.</small>
   <p id="identity-error" role="alert"></p>
 </section>
 <p id="manual-id-status" hidden></p>
+<button id="forget-account-id" type="button" hidden>Сменить Pocket ID</button>
+<small id="auto-refresh-status" hidden>Автообновление включено. Новые данные передаются сразу; проверка доставки — каждые 15 секунд. Окно расширения можно закрыть.</small>
 <section id="account-currency" hidden>
   <p id="account-identity"></p>
   <p id="currency-status" role="status"></p>
   <button id="confirm-usd" type="button">Мой счёт в USD — подтвердить</button>
   <button id="forget-usd" type="button" hidden>Отменить подтверждение USD</button>
-  <small>Подтверждай только валюту, которую видишь на своём счёте Pocket Option. После подтверждения обнови вкладку с графиком, чтобы получить новый баланс.</small>
+  <small>Подтверждай только валюту, которую видишь на своём счёте Pocket Option. Подтверждение USD сохраняется для этого ID и режима; новые изменения баланса передаются автоматически.</small>
   <p id="currency-error" role="alert"></p>
 </section>
 <section id="market-time" hidden>
@@ -44,7 +46,7 @@
   <p id="clock-error" role="alert"></p>
 </section>
 <button id="disconnect" type="button" hidden>Отключить модуль</button>
-<small id="module-version">Модуль 0.3.6</small>
+<small id="module-version">Модуль 0.3.7</small>
 <small>После обновления модуля обнови вкладку Pocket Option. Держи компьютер, сервер и график открытыми. Если Windows показывает неверное время, используй «Синхронизировать сейчас» в настройках часов.</small>
 <script src="popup.js"></script>
 </html>

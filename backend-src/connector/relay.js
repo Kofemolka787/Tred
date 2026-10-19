@@ -6,3 +6,6 @@ window.addEventListener("message", event => {
   if (!Array.isArray(events) || !events.length || events.length > 250) return;
   chrome.runtime.sendMessage({action:"events",events}).catch(() => {});
 });
+// Keep automatic delivery active while the terminal is open, even with the
+// popup closed. A retry preserves the original captured amount and timestamp.
+setInterval(()=>chrome.runtime.sendMessage({action:"sync"}).catch(()=>{}),15000);

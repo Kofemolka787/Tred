@@ -22,15 +22,26 @@ with tempfile.TemporaryDirectory(prefix="tred-bridge-check-") as temporary:
     except DomainError as error:
         assert str(error)=="Некорректное время данных."
     assert ledger.state({"id":101})["accounts"]==[]
+    accepted_balances=[]
+    original_ingest=ledger.ingest
+    def capture_ingest(token,body):
+        result=original_ingest(token,body)
+        for event in body["events"]:
+            if event["type"]=="account":
+                actual=ledger.state({"id":101})["accounts"][0]["balance"]
+                accepted_balances.append(actual)
+        return result
+    ledger.ingest=capture_ingest
     server=ThreadingHTTPServer(("127.0.0.1",0),handler(ledger))
     worker=threading.Thread(target=server.serve_forever,daemon=True);worker.start()
     try:
         subprocess.run(["node","check_connector_worker.js","--api",f"http://127.0.0.1:{server.server_port}","--fixture-token",token],check=True)
         state=ledger.state({"id":101})
-        assert state["accounts"][0]["balance"]=="100.00"
+        assert state["accounts"][0]["balance"]=="108.00"
+        assert ["5.00","100.00","108.00"]==list(dict.fromkeys(accepted_balances))
         assert state["accounts"][0]["mode"]=="demo"
         assert state["connection"]["live"]
         assert ledger.state({"id":202})["accounts"]==[]
-        print(json.dumps({"original_failure_reproduced":True,"filtered_mixed_batch_account_and_live_quote_accepted":True,"second_user_empty":True}))
+        print(json.dumps({"balance_updated_without_reconfirmation":True,"original_failure_reproduced":True,"filtered_mixed_batch_account_and_live_quote_accepted":True,"second_user_empty":True}))
     finally:
         server.shutdown();server.server_close();worker.join(timeout=5)

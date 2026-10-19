@@ -57,6 +57,15 @@ with tempfile.TemporaryDirectory(prefix="tred-pairing-ui-") as temporary:
                 expect(page.locator('#account-status')).to_have_text('Сервер недоступен')
                 expect(page.locator('#account-list strong')).to_have_text('$120.25')
                 assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
+                # Exercise the app's existing two-second poll, without rendering
+                # a new balance manually or reloading the page.
+                page.evaluate("window.fixtureState.connection.authenticated=true;window.fixtureState.connection.live=true;window.fixtureState.accounts=[{id:'456',mode:'demo',balance:'5.00',updated_at:Date.now()/1000,live:true}]")
+                expect(page.locator('#account-list strong')).to_have_text('$5.00',timeout=6000)
+                page.evaluate("window.fixtureState.accounts[0].balance='100.00';window.fixtureState.accounts[0].updated_at=Date.now()/1000")
+                expect(page.locator('#account-list strong')).to_have_text('$100.00',timeout=6000)
+                page.evaluate("window.fixtureState.accounts[0].balance='108.00';window.fixtureState.accounts[0].updated_at=Date.now()/1000")
+                expect(page.locator('#account-list strong')).to_have_text('$108.00',timeout=6000)
+                page.evaluate("window.fixtureState.accounts=[]")
                 page.evaluate('current=structuredClone(window.fixtureState);render()')
                 page.locator('#connect-backend').click()
                 page.wait_for_function('window.oldCalls===1')
@@ -81,7 +90,7 @@ with tempfile.TemporaryDirectory(prefix="tred-pairing-ui-") as temporary:
                 assert page.locator('#pair-code').inner_text()==''
                 assert page.locator('#copy-code').is_disabled()
                 assert not errors,errors
-                result={'live_quotes_without_balance_not_disconnected':True,'account_balance_and_pocket_id_rendered':True,'offline_last_balance_not_claimed_fresh':True,'old_pair_reply_cannot_overwrite_new_code':True,'pending_pair_requests_serialized':True,'code_displays_exact_server':True,'reopen_reuses_valid_code':True,'explicit_renew_rotates_code':True,'failed_new_connection_clears_old_code':True,'no_mobile_overflow':True,'page_errors':len(errors)}
+                result={'balance_5_to_100_to_108_via_poll_without_reload':True,'live_quotes_without_balance_not_disconnected':True,'account_balance_and_pocket_id_rendered':True,'offline_last_balance_not_claimed_fresh':True,'old_pair_reply_cannot_overwrite_new_code':True,'pending_pair_requests_serialized':True,'code_displays_exact_server':True,'reopen_reuses_valid_code':True,'explicit_renew_rotates_code':True,'failed_new_connection_clears_old_code':True,'no_mobile_overflow':True,'page_errors':len(errors)}
                 (ROOT/'artifacts/pairing-ui-check.json').write_text(json.dumps(result,indent=2)+'\n')
                 print(json.dumps(result))
             finally:browser.close()

@@ -21,15 +21,19 @@
     if(!opaque&&new Set(secondary.map(row=>row.value)).size===1){
       const chosen=secondary[0];return {uid:chosen.value,field:chosen.field,status:"present",present:true,shape,fingerprint:chosen.field+":"+chosen.value};
     }
-    // This digest stays in this socket's memory. Neither raw opaque IDs nor the
-    // digest leave the page. Only fixed field/type labels are exported.
+    // Raw opaque values never leave this socket. A domain-separated digest of
+    // an account identifier may be used ONLY inside the extension to reconnect
+    // a user-confirmed profile. It is stripped before the server API.
     const opaqueUid=!["none","empty","zero"].includes(shape.uid);
     const anchorFields=opaqueUid?["uid"]:fields;
     const parts=anchorFields.map(key=>[key,shape[key],["string","number","boolean"].includes(typeof data[key])?data[key]:null]);
     const complex=anchorFields.some(key=>["object","array"].includes(shape[key]));
     const digest=complex?null:await crypto.subtle.digest("SHA-256",new TextEncoder().encode(JSON.stringify(parts)));
     const fingerprint=complex?crypto.randomUUID():Array.from(new Uint8Array(digest),byte=>byte.toString(16).padStart(2,"0")).join("");
-    return {uid:null,field:opaqueUid?"opaque-uid":null,status:secondary.length>1?"ambiguous":opaque?"unsupported":"missing",present,shape,fingerprint};
+    const stableUid=typeof data.uid==="string"&&/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/.test(data.uid)&&!/^0+$/.test(data.uid);
+    const stableAliases=!opaqueUid&&!opaque&&secondary.length>1;
+    const sourceAccount=stableUid||stableAliases?"po1:"+Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256",new TextEncoder().encode("TRED-account-v1:"+fingerprint))),byte=>byte.toString(16).padStart(2,"0")).join(""):null;
+    return {uid:null,field:opaqueUid?"opaque-uid":secondary.length>1?"ambiguous-account":null,status:secondary.length>1?"ambiguous":opaque?"unsupported":"missing",present,shape,fingerprint,sourceAccount};
   };
   const currency = value => value == null ? null : typeof value === "string" && /^[A-Za-z]{3}$/.test(value) ? value.toUpperCase() : "unsupported";
   async function normalize(name, data, state) {
@@ -41,19 +45,19 @@
       const incoming = await identity(name,data);
       // Empty UID placeholders do not erase an ID established on this socket.
       // Secondary IDs also cannot replace a known primary UID on balance data.
-      const keepPrimary=name!=="successauth"&&["uid","opaque-uid"].includes(state.idField)&&!accountId(data.uid)&&["none","empty","zero"].includes(incoming.shape.uid);
+      const keepPrimary=name!=="successauth"&&["uid","opaque-uid","ambiguous-account"].includes(state.idField)&&!accountId(data.uid)&&["none","empty","zero"].includes(incoming.shape.uid);
       if (name === "successauth" || incoming.present&&!keepPrimary) {
         if (name === "successauth" || incoming.fingerprint !== state.idFingerprint) {
           state.stream=crypto.randomUUID();state.currencies={};state.account=null;
         }
-        state.uid=incoming.uid;state.idStatus=incoming.status;state.idField=incoming.field;state.idFingerprint=incoming.fingerprint;state.idShape=incoming.shape;
+        state.uid=incoming.uid;state.idStatus=incoming.status;state.idField=incoming.field;state.idFingerprint=incoming.fingerprint;state.idShape=incoming.shape;state.sourceAccount=incoming.sourceAccount??null;
       }
       const mode = [0,1,false,true].includes(data.isDemo) ? data.isDemo === 1 || data.isDemo === true ? "demo" : "real" : null;
       if (mode && Object.hasOwn(data,"currency")) state.currencies[mode] = currency(data.currency);
       const unit = Object.hasOwn(data,"currency") ? currency(data.currency) : mode ? state.currencies[mode] ?? null : null;
       state.account = state.uid && mode ? {account_id:state.uid,mode,currency:unit} : null;
       if (number(data.balance) || typeof data.balance === "string" && /^\d{1,8}(\.\d{1,2})?$/.test(data.balance)) {
-        events.push({type:"account",account_id:state.uid,mode,currency:unit,balance:String(data.balance),time:now,source_stream:state.stream,id_status:state.idStatus,id_shape:state.idShape});
+        events.push({type:"account",account_id:state.uid,mode,currency:unit,balance:String(data.balance),time:now,source_stream:state.stream,id_status:state.idStatus,id_shape:state.idShape,source_account:state.sourceAccount??null});
       }
     }
     if (Array.isArray(data) && (name === "updateAssets" || name === "assets")) {
