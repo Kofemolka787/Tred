@@ -12,7 +12,7 @@ import threading
 import time
 from urllib.error import HTTPError, URLError
 from urllib.request import ProxyHandler, build_opener, urlopen
-from tunnel_check import public_probe,quick_url,tunnel_command,tunnel_event
+from tunnel_check import can_wait_for_client,public_probe,quick_url,tunnel_command,tunnel_event
 
 ROOT = Path(__file__).resolve().parent
 RELEASE = "2026.10.1"
@@ -80,6 +80,8 @@ def main():
     if check_local(args.port):
         raise ValueError("TRED уже работает на этом порту. Используй открытое окно запуска; второй сервер не нужен.")
     args.data_dir.mkdir(parents=True,exist_ok=True)
+    # A previous verified URL belongs to the previous ephemeral route.
+    (args.data_dir/"server-url.txt").unlink(missing_ok=True)
     # Verify/download before starting the API, so failures leave no stray process.
     executable = None if args.local_only else tunnel_binary(args.data_dir/"tools")
     backend = subprocess.Popen([sys.executable,"-B","-u",str(ROOT/"backend.py"),"--port",str(args.port),"--database",str(args.data_dir/"ledger.sqlite3")],cwd=ROOT)
@@ -148,7 +150,27 @@ def main():
             if attempt%3==0:
                 print("Проверка HTTPS: "+diagnostic["https"]+"; канал: "+diagnostic["channel"],flush=True)
             time.sleep(1)
-        if diagnostic["https"]!="OK":
+        drain()
+        if can_wait_for_client(diagnostic["https"],diagnostic["channel"]) and tunnel.poll() is None and backend.poll() is None:
+            diagnostic["stage"]="waiting_for_client_dns";record()
+            print("\nТуннель подключён. Windows пока не находит IP-адрес сервера.",flush=True)
+            print("Адрес для проверки с телефона (доступ пока НЕ подтверждён):\n"+url,flush=True)
+            print("В Telegram на телефоне: TRED → Кабинет → Подключить кабинет.\nВставь адрес выше. Приложение само проверит HTTPS и подпись Telegram.\nЕсли не подключится, попробуй на телефоне мобильный интернет вместо Wi-Fi.\nОставь это окно открытым. Ctrl+C — остановить сервер.",flush=True)
+            previous=diagnostic["https"]
+            # Keep the existing route alive while a client on another network
+            # performs its own full HTTPS + signed identity verification.
+            while tunnel.poll() is None and backend.poll() is None:
+                time.sleep(5)
+                drain()
+                if tunnel.poll() is not None or backend.poll() is not None:break
+                diagnostic["https"]=public_probe(url)
+                record()
+                if diagnostic["https"]=="OK":break
+                if diagnostic["https"]!=previous:
+                    print("Проверка с ПК: "+diagnostic["https"]+"; канал: "+diagnostic["channel"],flush=True)
+                    previous=diagnostic["https"]
+                if not can_wait_for_client(diagnostic["https"],diagnostic["channel"]):break
+        if diagnostic["https"]!="OK" or tunnel.poll() is not None or backend.poll() is not None:
             drain();diagnostic["exit_code"]=tunnel.poll();record()
             raise ValueError("HTTPS-доступ не подтверждён: "+diagnostic["https"]+"; канал: "+diagnostic["channel"]+". Диагностика: "+str(args.data_dir/"tunnel-diagnostics.json"))
         diagnostic["stage"]="ready";record()

@@ -82,3 +82,9 @@ def public_probe(url,*,opener=None,timeout=4):
 
 def tunnel_command(executable,port):
     return [str(executable),"tunnel","--url",f"http://127.0.0.1:{port}","--protocol","http2","--no-autoupdate","--loglevel","info","--metrics","127.0.0.1:0"]
+
+
+def can_wait_for_client(https_status,channel):
+    # A connected edge plus local DNS failure can still work on another device.
+    # This is pending verification, never a successful public health check.
+    return https_status=="DNS_LOOKUP_FAILED" and channel=="CONNECTED"

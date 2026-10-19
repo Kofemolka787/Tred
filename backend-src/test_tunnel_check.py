@@ -6,7 +6,7 @@ import ssl
 import unittest
 from urllib.error import HTTPError,URLError
 
-from tunnel_check import NoRedirect,public_probe,quick_url,tunnel_command,tunnel_event
+from tunnel_check import NoRedirect,can_wait_for_client,public_probe,quick_url,tunnel_command,tunnel_event
 
 
 class Response(io.BytesIO):
@@ -64,6 +64,13 @@ class TunnelChecks(unittest.TestCase):
         self.assertEqual(tunnel_event("ERR failed to dial edge secret-token-fixture"),"EDGE_CONNECTION_FAILED")
         self.assertEqual(tunnel_event("INF Registered tunnel connection protocol=http2"),"CONNECTED")
         self.assertIsNone(tunnel_event("unrecognized secret-token-fixture"))
+
+    def test_only_local_dns_with_connected_edge_allows_client_verification(self):
+        self.assertTrue(can_wait_for_client("DNS_LOOKUP_FAILED","CONNECTED"))
+        for status in ("TLS_VERIFICATION_FAILED","UNEXPECTED_RESPONSE","HTTP_530_CF_1033","TIMEOUT","OK"):
+            self.assertFalse(can_wait_for_client(status,"CONNECTED"))
+        for channel in ("WAITING","DNS_LOOKUP_FAILED","EDGE_CONNECTION_FAILED"):
+            self.assertFalse(can_wait_for_client("DNS_LOOKUP_FAILED",channel))
 
 
 if __name__=="__main__":unittest.main()

@@ -75,9 +75,16 @@ window.TredData = (() => {
   async function connect(tg,value) {
     if (!tg?.initData) throw new Error("Открой TRED из Telegram, чтобы связать личный кабинет.");
     const base = endpoint(value);
-    const response = await fetch(base+"/healthz",{signal:AbortSignal.timeout(10000),redirect:"error",credentials:"omit"});
-    const health = await response.json();
-    if (!response.ok || health.service !== "tred-backend" || health.api_version !== 1) throw new Error("По этому адресу не найден сервер TRED.");
+    let response;
+    try {
+      response = await fetch(base+"/healthz",{signal:AbortSignal.timeout(10000),redirect:"error",credentials:"omit"});
+    } catch (_) {
+      throw new Error("Устройство не смогло связаться с сервером. Оставь окно TRED на компьютере открытым и проверь актуальный адрес. На телефоне можно попробовать мобильный интернет вместо Wi-Fi.");
+    }
+    let health;
+    try { health = await response.json(); }
+    catch (_) { throw new Error("По этому адресу не найден сервер TRED."); }
+    if (!response.ok || health?.ok !== true || health.service !== "tred-backend" || health.api_version !== 1) throw new Error("По этому адресу не найден сервер TRED.");
     const client = apiClient(tg,base);
     const state = await client.request("/api/state"); // Verified by server; metadata ID never authorizes access.
     try { localStorage.setItem(key(tg),base); } catch (_) {}
