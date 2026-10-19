@@ -1,13 +1,17 @@
 "use strict";
 // Never infer an account ID, demo/real mode or USD from prices or the URL.
 globalThis.TredAccount = (() => {
-  const id = value => typeof value === "string" && /^\d{1,20}$/.test(value);
+  const id = value => typeof value === "string" && /^\d{1,20}$/.test(value) && !/^0+$/.test(value);
   const mode = value => ["real","demo"].includes(value);
   const key = candidate => candidate.account_id+":"+candidate.mode;
   const confirmations = values => Array.isArray(values) ? values.filter(x=>typeof x==="string"&&/^\d{1,20}:(real|demo)$/.test(x)).slice(-20) : [];
   const stream = value => typeof value==="string"&&/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value);
   const streamKey = event => event.source_stream+":"+event.mode;
   const identities = values => Array.isArray(values)?values.filter(x=>x&&stream(x.source_stream)&&mode(x.mode)&&id(x.account_id)).slice(-20):[];
+  const manualStatuses=["missing","unsupported","ambiguous"];
+  const shapeTypes={none:"нет",empty:"пусто",zero:"ноль",integer:"целое число",digits:"цифры",number:"другой числовой формат",text:"текст",boolean:"логическое значение",object:"объект",array:"массив",other:"неподдерживаемый тип"};
+  const validShape=value=>value!==null&&typeof value==="object"&&!Array.isArray(value)&&Object.keys(value).every(key=>["uid","accountId","id"].includes(key)&&Object.hasOwn(shapeTypes,value[key]));
+  const shapeText=value=>value?" Поля ID: "+Object.entries(value).map(([key,type])=>key+" — "+shapeTypes[type]).join("; ")+".":"";
   function basic(event){
     if(!mode(event.mode))return "Баланс получен, но брокер не указал демо или реальный режим. Счёт не передан.";
     if(typeof event.balance!=="string"||!/^\d{1,8}(\.\d{1,2})?$/.test(event.balance)||Number(event.balance)>10000000)return "Баланс имеет неподдерживаемый формат. Сумма не округляется автоматически.";
@@ -15,15 +19,15 @@ globalThis.TredAccount = (() => {
     return null;
   }
   function resolve(event,bindings){
-    const {source_stream,id_status,...canonical}=event;
-    if(source_stream!==undefined&&!stream(source_stream)||id_status!==undefined&&!["missing","present","invalid","conflict"].includes(id_status))return {error:"Неподдерживаемые метаданные счёта. Обнови вкладку Pocket Option."};
-    if(["invalid","conflict"].includes(id_status))return {error:"Брокер передал некорректные или противоречивые ID счёта. Номер не подставляется вручную."};
+    const {source_stream,id_status,id_shape,...canonical}=event;
+    if(source_stream!==undefined&&!stream(source_stream)||id_status!==undefined&&![...manualStatuses,"present","invalid","conflict"].includes(id_status)||id_shape!==undefined&&!validShape(id_shape))return {error:"Неподдерживаемые метаданные счёта. Обнови вкладку Pocket Option."};
+    if(["invalid","conflict"].includes(id_status))return {error:"Вкладка ещё использует прежний обработчик ID. Обнови график Pocket Option после обновления модуля."};
     const error=basic(canonical);if(error)return {error};
     if(id(canonical.account_id))return {event:canonical};
-    if(id_status==="missing"&&stream(source_stream)){
+    if(manualStatuses.includes(id_status)&&stream(source_stream)){
       const selected=identities(bindings).find(x=>streamKey(x)===streamKey(event));
       if(selected)return {event:{...canonical,account_id:selected.account_id},manual:true,source_stream};
-      return {error:"Баланс получен без Pocket ID. Подтверди номер из своего профиля Pocket Option ниже.",identityCandidate:{source_stream,mode:event.mode,reported_currency:event.currency??null,seen_at:event.time}};
+      return {error:"Баланс получен. Подтверди Pocket ID из своего профиля ниже."+shapeText(id_shape),identityCandidate:{source_stream,mode:event.mode,reported_currency:event.currency??null,seen_at:event.time,id_status}};
     }
     return {event:canonical};
   }
@@ -36,5 +40,5 @@ globalThis.TredAccount = (() => {
     if(confirmations(confirmed).includes(key(candidate)))return {event:{...event,currency:"USD"},candidate};
     return {error:"ID и режим счёта получены, но валюта отсутствует в сообщении брокера. Подтверди USD ниже, только если счёт в долларах.",candidate};
   }
-  return {id,mode,key,confirmations,inspect,stream,streamKey,identities,basic,resolve};
+  return {id,mode,key,confirmations,inspect,stream,streamKey,identities,basic,resolve,manualStatuses};
 })();

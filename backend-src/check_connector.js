@@ -6,9 +6,9 @@ class Socket {
   constructor(url){this.url=url;this.handlers={};sockets.push(this);}
   addEventListener(name,fn){this.handlers[name]=fn;}
   send(value){sent.push(value);}
-  emit(data){this.handlers.message?.({data});}
+  emit(data){this.pending=this.handlers.message?.({data});return this.pending;}
 }
-const sandbox={window:{WebSocket:Socket,postMessage:(value)=>forwarded.push(value)},location:{origin:"https://pocketoption.com"},URL,Blob,ArrayBuffer,TextDecoder,Date,Promise,Number,JSON,Object,crypto:require('node:crypto'),console};
+const sandbox={window:{WebSocket:Socket,postMessage:(value)=>forwarded.push(value)},location:{origin:"https://pocketoption.com"},URL,Blob,ArrayBuffer,TextDecoder,TextEncoder,Date,Promise,Number,JSON,Object,crypto:require('node:crypto'),console};
 vm.runInNewContext(fs.readFileSync("connector/observer.js","utf8"),sandbox);
 const socket=new sandbox.window.WebSocket("wss://demo-api-eu.po.market/socket.io/?EIO=4&transport=websocket");
 socket.emit('42["auth",{"session":"fixture-secret-never-forward","uid":456,"isDemo":1}]');
@@ -20,6 +20,7 @@ socket.emit('42'+JSON.stringify(["updateStream",[["EURUSD",Date.now()/1000+7200,
 socket.emit('42'+JSON.stringify(["loadHistoryPeriod",{asset:"EURUSD",period:60,data:[{time:Math.floor(Date.now()/60000)*60+7200,open:1.1,close:1.2,high:1.3,low:1.0}]}]));
 socket.emit('42["successcloseOrder",{"session":"fixture-secret-never-forward","uid":456}]'); // Incomplete result must be ignored.
 setImmediate(async()=>{
+  await Promise.all(sockets.map(s=>s.pending));
   const events=forwarded.flatMap(x=>x.events);
   assert.equal(sent.length,0,"Observer must never send an order or subscription");
   assert.equal(events.filter(x=>x.type==="account").length,2);
@@ -44,7 +45,7 @@ setImmediate(async()=>{
   other.emit('42["successauth",{"uid":123,"currency":"USD","isDemo":1}]');
   other.emit('42["successupdateBalance",{"balance":20}]');
   socket.emit('42["successupdateBalance",{"balance":110,"isDemo":1}]');
-  await new Promise(setImmediate);
+  await Promise.all(sockets.map(s=>s.pending));
   const accounts=forwarded.flatMap(x=>x.events).filter(x=>x.type==="account");
   const at=balance=>accounts.find(x=>x.balance===balance);
   assert.equal(accounts.length,7);
@@ -66,15 +67,36 @@ setImmediate(async()=>{
   const generic=new sandbox.window.WebSocket("wss://api-eu.po.market/socket.io/");
   generic.emit('42["successupdateBalance",{"id":987,"balance":35,"isDemo":1}]');
   generic.emit('42["successupdateBalance",{"accountId":"777","balance":36,"isDemo":0}]');
-  await new Promise(setImmediate);
+  await Promise.all(sockets.map(s=>s.pending));
   const selected=forwarded.flatMap(x=>x.events).filter(x=>x.type==="account");
   const balance=value=>selected.find(x=>x.balance===value);
   assert.equal(balance('31').account_id,'321');assert.equal(balance('32').account_id,'654');
   assert.notEqual(balance('31').source_stream,balance('32').source_stream,"Reauthentication rotates the manual confirmation boundary");
-  assert.equal(balance('33').account_id,null);assert.equal(balance('33').id_status,'conflict');
-  assert.equal(balance('34').account_id,null);assert.equal(balance('34').id_status,'invalid');
+  assert.equal(balance('33').account_id,'345');assert.equal(balance('33').id_status,'present',"Primary UID is not compared with secondary IDs");
+  assert.equal(balance('34').account_id,null);assert.equal(balance('34').id_status,'unsupported');
   assert.equal(balance('35').account_id,null,"Generic balance id is not an account ID");
   assert.equal(balance('36').account_id,'777');
   assert.equal(sent.length,0);
-  console.log(JSON.stringify({ok:true,fixture_protocol:true,auth_fields_not_exported:true,no_outbound_commands:true,binary_quotes_decoded:true,incomplete_settlements_ignored:true,source_clock_tagged_without_timestamp_changes:true,account_identity_scoped_to_socket:true,split_metadata_and_unframed_balance:true,missing_currency_and_mode_not_guessed:true,auth_id_aliases_and_conflicts_checked:true,reauth_rotates_confirmation_context:true}));
+  forwarded=[];
+  const formats=new sandbox.window.WebSocket('wss://api-eu.po.market/socket.io/');
+  formats.emit('42["successauth",{"uid":456,"id":789,"accountId":987,"isDemo":1,"currency":"USD","balance":41}]');
+  formats.emit('42["successupdateBalance",{"uid":null,"accountId":"opaque-wallet","balance":42,"isDemo":1}]');
+  formats.emit('42["successupdateBalance",{"uid":0,"balance":43,"isDemo":1}]');
+  formats.emit('42["successupdateBalance",{"uid":457,"balance":44,"isDemo":1}]');
+  formats.emit('42["successauth",{"uid":"opaque-user-A-never-forward","id":true,"balance":45,"isDemo":1,"currency":"USD"}]');
+  formats.emit('42["successupdateBalance",{"uid":"opaque-user-A-never-forward","balance":46,"isDemo":1}]');
+  formats.emit('42["successupdateBalance",{"uid":"opaque-user-B-never-forward","balance":47,"isDemo":1}]');
+  formats.emit('42["successauth",{"id":111,"accountId":222,"balance":48,"isDemo":1}]');
+  await Promise.all(sockets.map(s=>s.pending));
+  const frames=forwarded.flatMap(x=>x.events),frame=value=>frames.find(x=>x.balance===value);
+  assert.equal(frame('41').account_id,'456');assert.equal(frame('42').account_id,'456');assert.equal(frame('43').account_id,'456');
+  assert.equal(frame('41').source_stream,frame('42').source_stream);assert.equal(frame('42').currency,'USD');
+  assert.notEqual(frame('43').source_stream,frame('44').source_stream,'Changed UID rotates manual context');
+  assert.equal(frame('45').id_status,'unsupported');assert.equal(frame('45').id_shape.uid,'text');assert.equal(frame('45').id_shape.id,'boolean');
+  assert.equal(frame('45').source_stream,frame('46').source_stream,'Same opaque UID remains a local identity anchor');
+  assert.equal(frame('46').currency,'USD','Explicit currency from this auth context is retained');
+  assert.notEqual(frame('46').source_stream,frame('47').source_stream,'Changed opaque identifier cannot inherit manual confirmation');
+  assert.equal(frame('48').id_status,'ambiguous');assert.equal(frame('48').account_id,null);
+  assert(!JSON.stringify(forwarded).includes('opaque-user'));assert(!JSON.stringify(forwarded).includes('opaque-wallet'));
+  console.log(JSON.stringify({ok:true,fixture_protocol:true,auth_fields_not_exported:true,no_outbound_commands:true,binary_quotes_decoded:true,incomplete_settlements_ignored:true,source_clock_tagged_without_timestamp_changes:true,account_identity_scoped_to_socket:true,split_metadata_and_unframed_balance:true,missing_currency_and_mode_not_guessed:true,primary_uid_not_compared_with_secondary_ids:true,empty_uid_keeps_authenticated_identity:true,unsupported_id_shape_has_no_raw_values:true,changed_opaque_id_rotates_context:true,reauth_rotates_confirmation_context:true}));
 });

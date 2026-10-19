@@ -29,7 +29,7 @@ async function checks(){
   assert.equal(h.requests[2].body.events[0].time,now,"No timestamp rewriting");
   let status=await h.message({action:"status"});
   assert(status.paired&&!status.needsPairing&&status.lastSeen);
-  assert.equal(status.worker_version,"0.3.5");
+  assert.equal(status.worker_version,"0.3.6");
   assert.match(status.diagnostic,/quote|Котировка/);assert.match(status.diagnostic,/30 с/);
   assert(!JSON.stringify(status).includes(token));
   assert(!JSON.stringify(h.storage).includes('"balance"'));
@@ -180,19 +180,43 @@ async function checks(){
   const beforeConflict=manual.requests.length;
   await manual.events([{...unidentified,id_status:"conflict"},{...unidentified,id_status:"invalid"}]);
   assert.equal(manual.requests.length,beforeConflict);assert.equal(manual.storage.identityCandidate,null);
+  assert.match((await manual.message({action:"status"})).diagnostic,/прежний обработчик ID/);
+  for(const id_status of ["unsupported","ambiguous"]){
+    const variant=harness();
+    const id_shape=id_status==="unsupported"?{uid:"text",accountId:"none",id:"boolean"}:{uid:"empty",accountId:"digits",id:"digits"};
+    await variant.events([{...unidentified,id_status,id_shape}]);
+    assert.equal(variant.requests.length,0,"Unknown IDs are never selected automatically");
+    assert.equal(variant.storage.identityCandidate.id_status,id_status);
+    assert.match((await variant.message({action:"status",active_tab_id:1})).diagnostic,/Поля ID:/);
+    assert((await variant.message({...bind,account_id:"0"})).error);
+    assert((await variant.message({...bind,account_id:"000"})).error);
+    variant.advance(10);
+    assert((await variant.message(bind)).ok);
+    const accepted=variant.requests[0].body.events[0];
+    assert.equal(accepted.account_id,"456");assert.equal(accepted.balance,account.balance);assert.equal(accepted.time,now);
+    assert(!Object.hasOwn(accepted,"id_shape"),"Schema diagnostics never reach the account API");
+    assert(!JSON.stringify(variant.storage).includes('"balance"'));
+  }
+  const unsafeShape=harness();
+  await unsafeShape.events([{...unidentified,id_status:"unsupported",id_shape:{uid:"fixture-private-opaque-id"}},{...unidentified,id_status:"unsupported",id_shape:{session:"text"}}]);
+  assert.equal(unsafeShape.requests.length,0);assert.equal(unsafeShape.storage.identityCandidate,null);
+  assert(!JSON.stringify(unsafeShape.storage).includes("fixture-private"));
+  const explicitCurrency=harness();
+  await explicitCurrency.events([{...unidentified,id_status:"unsupported",currency:"EUR",id_shape:{uid:"text"}}]);
+  assert.equal(explicitCurrency.storage.identityCandidate,null);assert((await explicitCurrency.message(bind)).error);
   const expiredBalance=harness();await expiredBalance.events([unidentified]);expiredBalance.advance(61);
   assert((await expiredBalance.message(bind)).error);assert.equal(expiredBalance.requests.length,0,"Held amount is never freshened");
   const cold=harness(null,{identityCandidate:{source_stream:stream,mode:"demo",reported_currency:null,seen_at:now,tab_id:1}});
   assert.match((await cold.message(bind)).error,/Обнови график/,"After a cold restart a new actual balance is required");
   const credential=harness();await credential.events([{...unidentified,session:"fixture-private-session"}]);
   assert.equal(credential.storage.identityCandidate,null);assert.equal(credential.requests.length,0);
-  console.log(JSON.stringify({ok:true,worker_scenarios:31,utc_timestamps_unchanged:true,bad_quote_does_not_block_account:true,failed_claim_preserves_binding:true,status_excludes_token:true,unknown_credential_fields_not_sent:true,late_response_after_disconnect_ignored:true,html_and_missing_token_keep_binding:true,explicit_po_utc2_profile:true,stale_and_future_still_rejected:true,closed_candles_decoded_before_filter:true,source_time_provenance_retained:true,no_arrival_time_calibration:true,usd_requires_confirmation_when_missing:true,confirmation_scoped_to_account_and_mode:true,explicit_other_currency_cannot_be_overridden:true,currency_confirmation_does_not_replay_balance:true,manual_identity_scoped_to_stream_and_mode:true,fresh_pending_balance_keeps_original_time:true,pending_balance_not_persisted:true,broker_identity_not_overridden:true}));
+  console.log(JSON.stringify({ok:true,worker_scenarios:36,utc_timestamps_unchanged:true,bad_quote_does_not_block_account:true,failed_claim_preserves_binding:true,status_excludes_token:true,unknown_credential_fields_not_sent:true,late_response_after_disconnect_ignored:true,html_and_missing_token_keep_binding:true,explicit_po_utc2_profile:true,stale_and_future_still_rejected:true,closed_candles_decoded_before_filter:true,source_time_provenance_retained:true,no_arrival_time_calibration:true,usd_requires_confirmation_when_missing:true,confirmation_scoped_to_account_and_mode:true,explicit_other_currency_cannot_be_overridden:true,currency_confirmation_does_not_replay_balance:true,manual_identity_scoped_to_stream_and_mode:true,fresh_pending_balance_keeps_original_time:true,pending_balance_not_persisted:true,broker_identity_not_overridden:true,unknown_id_requires_explicit_scoped_confirmation:true,schema_diagnostics_exclude_raw_ids:true,zero_id_rejected:true}));
 }
 async function realHttp(){
   const api=process.argv[process.argv.indexOf("--api")+1],fixtureToken=process.argv[process.argv.indexOf("--fixture-token")+1];
   assert(/^http:\/\/127\.0\.0\.1:\d+$/.test(api));
   const h=harness((url,options)=>fetch(url.replace(base,api),options),{token:fixtureToken});
-  const missingIdentity={...account,account_id:null,currency:null,source_stream:"11111111-1111-4111-8111-111111111111",id_status:"missing"};
+  const missingIdentity={...account,account_id:null,currency:null,source_stream:"11111111-1111-4111-8111-111111111111",id_status:"unsupported",id_shape:{uid:"text",accountId:"none",id:"boolean"}};
   await h.events([missingIdentity,asset,quote,{...quote,time:now+30}]);
   const s=await h.message({action:"status"});
   assert.equal(s.lastError,"");assert(s.paired&&s.lastSeen);
@@ -207,6 +231,6 @@ async function realHttp(){
   const decoded=await h.message({action:"status"});
   assert.equal(decoded.lastError,"");assert(decoded.receivedKinds.includes("account")&&decoded.receivedKinds.includes("quote")&&decoded.receivedKinds.includes("candle"));
   assert.equal(h.requests.at(-2).body.events.length,1);assert.equal(h.requests.at(-1).body.events.length,1);
-  console.log(JSON.stringify({ok:true,actual_backend_http:true,good_types_accepted:4,bad_future_quote_not_sent:true,po_utc2_quote_and_closed_candle_accepted:true,stale_native_quote_not_sent:true,missing_identity_and_currency_held_until_scoped_confirmation:true}));
+  console.log(JSON.stringify({ok:true,actual_backend_http:true,good_types_accepted:4,bad_future_quote_not_sent:true,po_utc2_quote_and_closed_candle_accepted:true,stale_native_quote_not_sent:true,unknown_identity_and_missing_currency_held_until_scoped_confirmation:true}));
 }
 (process.argv.includes("--api")?realHttp():checks()).catch(error=>{console.error(error);process.exitCode=1;});

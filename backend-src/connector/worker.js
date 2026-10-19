@@ -1,6 +1,6 @@
 "use strict";
 importScripts("time-check.js","account-check.js");
-const WORKER_VERSION="0.3.5";
+const WORKER_VERSION="0.3.6";
 const endpoint=value=>{
   const u=new URL(value);
   if(u.protocol!=="https:"||!/^[a-z0-9-]+\.trycloudflare\.com$/.test(u.hostname)||u.port||u.username||u.password||u.search||u.hash||u.pathname!=="/")throw new Error("Укажи HTTPS-адрес своего TRED-туннеля.");
@@ -17,7 +17,7 @@ async function post(base,path,body,token){
   return result;
 }
 chrome.storage.local.setAccessLevel({accessLevel:"TRUSTED_CONTEXTS"});
-const eventFields={account:["type","mode","account_id","currency","balance","time","source_stream","id_status"],asset:["type","symbol","market","is_open","payout","expiries","time"],quote:["type","symbol","price","time","source_clock"],candle:["type","symbol","period","time","open","high","low","close","source_clock"],trade:["type","mode","account_id","id","symbol","direction","stake","opened_at","expires_at","closed_at","pnl","status","time"]};
+const eventFields={account:["type","mode","account_id","currency","balance","time","source_stream","id_status","id_shape"],asset:["type","symbol","market","is_open","payout","expiries","time"],quote:["type","symbol","price","time","source_clock"],candle:["type","symbol","period","time","open","high","low","close","source_clock"],trade:["type","mode","account_id","id","symbol","direction","stake","opened_at","expires_at","closed_at","pnl","status","time"]};
 let queue=[],sending=false,timer,generation=0;
 // Pending balance is usable for <=60 seconds, in RAM, at its ORIGINAL time.
 // It may be delivered once after an explicit identity confirmation, never aged
@@ -124,7 +124,7 @@ chrome.runtime.onMessage.addListener((message,sender,reply)=>{
       if(streamTabs.get(target.source_stream)!==message.active_tab_id)throw new Error("График изменился. Открой модуль на нужной вкладке Pocket Option.");
       prunePending();
       const pending=pendingAccounts.get(TredAccount.streamKey(target));
-      if(!pending||TredTime.problem(pending,Date.now()/1000)||pending.id_status!=="missing"||pending.account_id!=null||TredAccount.basic(pending))throw new Error("Свежий баланс уже недоступен. Обнови график Pocket Option, затем подтверди ID в течение минуты.");
+      if(!pending||TredTime.problem(pending,Date.now()/1000)||!TredAccount.manualStatuses.includes(pending.id_status)||pending.account_id!=null||TredAccount.basic(pending))throw new Error("Свежий баланс уже недоступен. Обнови график Pocket Option, затем подтверди ID в течение минуты.");
       if(pending.currency==null&&message.confirm_usd!==true)throw new Error("Если счёт в USD, отметь подтверждение валюты. Другие валюты пока не поддерживаются.");
       generation++;queue=[];
       const manualIdentities=TredAccount.identities(stored.manualIdentities).filter(x=>TredAccount.streamKey(x)!==TredAccount.streamKey(target));

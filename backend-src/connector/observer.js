@@ -6,36 +6,54 @@
   const safeSymbol = v => typeof v === "string" && /^[A-Za-z0-9][A-Za-z0-9_./ #-]{1,31}$/.test(v);
   const ts = v => number(v) ? (v > 1e11 ? v / 1000 : v) : null;
   const emit = events => { if (events.length) window.postMessage({source:"tred-observer-v1", events:events.slice(0,250)}, location.origin); };
-  const accountId = value => (typeof value === "string" || typeof value === "number" && Number.isSafeInteger(value)) && /^\d{1,20}$/.test(String(value)) ? String(value) : null;
-  const identity = (name,data) => {
-    // `id` belongs to the authenticated account only in successauth. A generic
-    // balance/order `id` must never be interpreted as a Pocket account ID.
+  const accountId = value => (typeof value === "string" || typeof value === "number" && Number.isSafeInteger(value)) && /^\d{1,20}$/.test(String(value)) && !/^0+$/.test(String(value)) ? String(value) : null;
+  const idType = value => value===undefined?"none":value===null||value===""?"empty":value===0||typeof value==="string"&&/^0+$/.test(value)?"zero":accountId(value)?typeof value==="number"?"integer":"digits":Array.isArray(value)?"array":["number","string","boolean","object"].includes(typeof value)?typeof value==="string"?"text":typeof value:"other";
+  const identity = async (name,data) => {
+    // UID is authoritative. Secondary account/resource IDs are not required to
+    // equal it. A generic balance/order `id` is never an account identifier.
     const fields = name === "successauth" ? ["uid","accountId","id"] : ["uid","accountId"];
-    const values = fields.filter(key=>Object.hasOwn(data,key)&&data[key]!=null).map(key=>accountId(data[key]));
-    if(!values.length)return {uid:null,status:"missing",present:false};
-    if(values.some(value=>value===null))return {uid:null,status:"invalid",present:true};
-    if(new Set(values).size!==1)return {uid:null,status:"conflict",present:true};
-    return {uid:values[0],status:"present",present:true};
+    const shape=Object.fromEntries(fields.map(key=>[key,idType(data[key])]));
+    const present=fields.some(key=>!["none","empty","zero"].includes(shape[key]));
+    const primary=accountId(data.uid);
+    if(primary)return {uid:primary,field:"uid",status:"present",present:true,shape,fingerprint:"uid:"+primary};
+    const secondary=fields.filter(key=>key!=="uid").map(key=>({field:key,value:accountId(data[key])})).filter(row=>row.value);
+    const opaque=fields.some(key=>!["none","empty","zero","integer","digits"].includes(shape[key]));
+    if(!opaque&&new Set(secondary.map(row=>row.value)).size===1){
+      const chosen=secondary[0];return {uid:chosen.value,field:chosen.field,status:"present",present:true,shape,fingerprint:chosen.field+":"+chosen.value};
+    }
+    // This digest stays in this socket's memory. Neither raw opaque IDs nor the
+    // digest leave the page. Only fixed field/type labels are exported.
+    const opaqueUid=!["none","empty","zero"].includes(shape.uid);
+    const anchorFields=opaqueUid?["uid"]:fields;
+    const parts=anchorFields.map(key=>[key,shape[key],["string","number","boolean"].includes(typeof data[key])?data[key]:null]);
+    const complex=anchorFields.some(key=>["object","array"].includes(shape[key]));
+    const digest=complex?null:await crypto.subtle.digest("SHA-256",new TextEncoder().encode(JSON.stringify(parts)));
+    const fingerprint=complex?crypto.randomUUID():Array.from(new Uint8Array(digest),byte=>byte.toString(16).padStart(2,"0")).join("");
+    return {uid:null,field:opaqueUid?"opaque-uid":null,status:secondary.length>1?"ambiguous":opaque?"unsupported":"missing",present,shape,fingerprint};
   };
   const currency = value => value == null ? null : typeof value === "string" && /^[A-Za-z]{3}$/.test(value) ? value.toUpperCase() : "unsupported";
-  function normalize(name, data, state) {
+  async function normalize(name, data, state) {
     const now = Date.now()/1000;
     const events = [];
     if (data && !Array.isArray(data) && (name === "successauth" || name === "successupdateBalance" || name === "balance")) {
       // Identity/currency belong to this socket, never another account's socket.
       // A missing mode or currency is forwarded as missing, never guessed.
-      const incoming = identity(name,data);
-      if (name === "successauth") state.stream=crypto.randomUUID();
-      if (name === "successauth" || incoming.present) {
-        if (name === "successauth" || incoming.uid !== state.uid) { state.currencies = {}; state.account = null; }
-        state.uid = incoming.uid;state.idStatus=incoming.status;
+      const incoming = await identity(name,data);
+      // Empty UID placeholders do not erase an ID established on this socket.
+      // Secondary IDs also cannot replace a known primary UID on balance data.
+      const keepPrimary=name!=="successauth"&&["uid","opaque-uid"].includes(state.idField)&&!accountId(data.uid)&&["none","empty","zero"].includes(incoming.shape.uid);
+      if (name === "successauth" || incoming.present&&!keepPrimary) {
+        if (name === "successauth" || incoming.fingerprint !== state.idFingerprint) {
+          state.stream=crypto.randomUUID();state.currencies={};state.account=null;
+        }
+        state.uid=incoming.uid;state.idStatus=incoming.status;state.idField=incoming.field;state.idFingerprint=incoming.fingerprint;state.idShape=incoming.shape;
       }
       const mode = [0,1,false,true].includes(data.isDemo) ? data.isDemo === 1 || data.isDemo === true ? "demo" : "real" : null;
-      if (state.uid && mode && Object.hasOwn(data,"currency")) state.currencies[mode] = currency(data.currency);
-      const unit = Object.hasOwn(data,"currency") ? currency(data.currency) : state.uid && mode ? state.currencies[mode] ?? null : null;
+      if (mode && Object.hasOwn(data,"currency")) state.currencies[mode] = currency(data.currency);
+      const unit = Object.hasOwn(data,"currency") ? currency(data.currency) : mode ? state.currencies[mode] ?? null : null;
       state.account = state.uid && mode ? {account_id:state.uid,mode,currency:unit} : null;
       if (number(data.balance) || typeof data.balance === "string" && /^\d{1,8}(\.\d{1,2})?$/.test(data.balance)) {
-        events.push({type:"account",account_id:state.uid,mode,currency:unit,balance:String(data.balance),time:now,source_stream:state.stream,id_status:state.idStatus});
+        events.push({type:"account",account_id:state.uid,mode,currency:unit,balance:String(data.balance),time:now,source_stream:state.stream,id_status:state.idStatus,id_shape:state.idShape});
       }
     }
     if (Array.isArray(data) && (name === "updateAssets" || name === "assets")) {
@@ -77,7 +95,7 @@
       let host;
       try { host = new URL(args[0]).hostname; } catch (_) { return; }
       if (!(host === "po.market" || host.endsWith(".po.market"))) return;
-      const state = {uid:null,idStatus:"missing",currencies:{},account:null,stream:crypto.randomUUID()};
+      const state = {uid:null,idStatus:"missing",idField:null,idFingerprint:null,idShape:{uid:"none",accountId:"none"},currencies:{},account:null,stream:crypto.randomUUID()};
       let pending = null;
       let queue = Promise.resolve();
       this.addEventListener("message", event => {
@@ -90,23 +108,24 @@
             if (pending) {
               const binary = JSON.parse(frame);
               const name = pending; pending = null;
-              normalize(name,binary,state);
+              await normalize(name,binary,state);
             } else if (frame.startsWith("451-")) {
               const parsed = JSON.parse(frame.slice(4));
               const allowed = ["successauth","successupdateBalance","balance","updateAssets","assets","updateStream","loadHistoryPeriod","updateHistoryNew","candles","successopenOrder","successcloseOrder","updateOpenedDeals","updateClosedDeals"];
               pending = allowed.includes(parsed[0]) ? parsed[0] : "unsupported";
             } else if (frame.startsWith("42")) {
               const parsed = JSON.parse(frame.slice(2));
-              normalize(parsed[0],parsed[1],state);
+              await normalize(parsed[0],parsed[1],state);
             } else if (frame.startsWith("{")) {
               const parsed = JSON.parse(frame);
-              if (parsed && Object.hasOwn(parsed,"balance")) normalize("balance",parsed,state);
+              if (parsed && Object.hasOwn(parsed,"balance")) await normalize("balance",parsed,state);
             } else if (frame.startsWith("[")) {
               const parsed = JSON.parse(frame);
-              if (Array.isArray(parsed) && Array.isArray(parsed[0])) normalize("assets",parsed,state);
+              if (Array.isArray(parsed) && Array.isArray(parsed[0])) await normalize("assets",parsed,state);
             }
           } catch (_) { pending = null; }
         }).catch(() => { pending = null; });
+        return queue;
       });
     }
   }

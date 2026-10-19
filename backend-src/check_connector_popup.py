@@ -24,12 +24,12 @@ try:
             page=browser.new_page(viewport={"width":340,"height":820});errors=[]
             page.on("pageerror",lambda error:errors.append(str(error)))
             page.add_init_script("""
-              window.fixture={worker_version:'0.3.5',base:'https://fixture-route.trycloudflare.com',paired:true,needsPairing:false,lastError:'',diagnostic:'Котировка · time: опережает часы браузера примерно на 7200 с. Событие не передано.',receivedKinds:['asset'],marketClock:'utc'};
+              window.fixture={worker_version:'0.3.6',base:'https://fixture-route.trycloudflare.com',paired:true,needsPairing:false,lastError:'',diagnostic:'Котировка · time: опережает часы браузера примерно на 7200 с. Событие не передано.',receivedKinds:['asset'],marketClock:'utc'};
               window.reloaded=0;
               window.fixtureTabId=1;window.idConfirmations=0;
               window.chrome={tabs:{query:async()=>[{id:window.fixtureTabId}]},runtime:{sendMessage:async message=>{
                 if(message.action==='status')return structuredClone(window.fixture);
-                if(message.action==='disconnect'){window.fixture={worker_version:'0.3.5',paired:false,lastError:'Старая ошибка'};return {ok:true};}
+                if(message.action==='disconnect'){window.fixture={worker_version:'0.3.6',paired:false,lastError:'Старая ошибка'};return {ok:true};}
                 if(message.action==='market-clock'){window.fixture.marketClock=message.profile;window.fixture.diagnostic='';return {ok:true};}
                 if(message.action==='confirm-usd'){if(message.account_id!==window.fixture.accountCandidate.account_id||message.mode!==window.fixture.accountCandidate.mode)throw Error('Wrong account');window.fixture.usdConfirmed=true;return {ok:true};}
                 if(message.action==='forget-usd'){window.fixture.usdConfirmed=false;return {ok:true};}
@@ -72,8 +72,9 @@ try:
             assert 'обнови' in page.locator('#currency-error').inner_text()
             page.locator('#forget-usd').click()
             page.locator('#confirm-usd').wait_for()
-            page.evaluate("window.fixture.accountCandidate=null;window.fixture.identityCandidate={source_stream:'11111111-1111-4111-8111-111111111111',mode:'demo',reported_currency:null,tab_id:1};window.fixture.lastManualAccountId=''")
+            page.evaluate("window.fixture.accountCandidate=null;window.fixture.identityCandidate={source_stream:'11111111-1111-4111-8111-111111111111',mode:'demo',reported_currency:null,tab_id:1,id_status:'unsupported'};window.fixture.diagnostic='Баланс получен. Подтверди Pocket ID из своего профиля ниже. Поля ID: uid — текст; id — логическое значение.';window.fixture.lastManualAccountId=''")
             page.locator('#manual-identity').wait_for()
+            assert 'Поля ID: uid — текст' in page.locator('#diagnostic').inner_text()
             page.locator('#pocket-id').fill('456')
             page.wait_for_timeout(2200)
             assert page.locator('#pocket-id').input_value()=='456','Polling must preserve typed ID'
@@ -112,7 +113,7 @@ try:
             assert 'Модуль ещё не связан' not in page.locator('#connection').inner_text()
             page.locator('#reload-module').click();assert page.evaluate('window.reloaded')==1
             assert not errors,errors
-            result={"actual_html_js_fixture_ui":True,"paired_form_hidden":True,"time_diagnostic_visible":True,"explicit_clock_toggle_and_revert":True,"account_usd_confirmation_and_revoke":True,"pocket_account_identity_visible":True,"manual_id_form_with_explicit_usd":True,"poll_preserves_typed_id":True,"manual_id_provenance_visible":True,"clock_selection_preserves_pairing_ui":True,"status_poll_preserves_typed_address":True,"failed_claim_keeps_connection_status":True,"legacy_worker_detected":True,"stale_data_error_hidden_when_unpaired":True,"page_errors":len(errors),"native_mv3_update_verified":False,"native_mv3_blocker":"Managed Chromium administrator policy disables unpacked extension loading"}
+            result={"actual_html_js_fixture_ui":True,"paired_form_hidden":True,"time_diagnostic_visible":True,"explicit_clock_toggle_and_revert":True,"account_usd_confirmation_and_revoke":True,"pocket_account_identity_visible":True,"manual_id_form_with_explicit_usd":True,"unknown_id_shape_shown_without_raw_values":True,"poll_preserves_typed_id":True,"manual_id_provenance_visible":True,"clock_selection_preserves_pairing_ui":True,"status_poll_preserves_typed_address":True,"failed_claim_keeps_connection_status":True,"legacy_worker_detected":True,"stale_data_error_hidden_when_unpaired":True,"page_errors":len(errors),"native_mv3_update_verified":False,"native_mv3_blocker":"Managed Chromium administrator policy disables unpacked extension loading"}
             (ROOT/"artifacts/connector-popup-check.json").write_text(json.dumps(result,indent=2)+'\n')
             print(json.dumps(result))
         finally:browser.close()

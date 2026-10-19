@@ -19,7 +19,7 @@
 <section id="manual-identity" hidden>
   <p><strong>Подтверди Pocket ID</strong></p>
   <p id="identity-mode"></p>
-  <small>Терминал передал баланс без номера счёта. Скопируй Pocket ID из своего профиля Pocket Option.</small>
+  <small>Баланс поступает, а Pocket ID нужно проверить. Скопируй номер из своего профиля Pocket Option.</small>
   <form id="identity-form">
     <label>Pocket ID<input id="pocket-id" type="text" inputmode="numeric" pattern="[0-9]{1,20}" maxlength="20" autocomplete="off" required></label>
     <label id="identity-usd-label" class="check-label"><input id="identity-usd" type="checkbox">Этот счёт в USD — подтверждаю</label>
@@ -44,7 +44,7 @@
   <p id="clock-error" role="alert"></p>
 </section>
 <button id="disconnect" type="button" hidden>Отключить модуль</button>
-<small id="module-version">Модуль 0.3.5</small>
+<small id="module-version">Модуль 0.3.6</small>
 <small>После обновления модуля обнови вкладку Pocket Option. Держи компьютер, сервер и график открытыми. Если Windows показывает неверное время, используй «Синхронизировать сейчас» в настройках часов.</small>
 <script src="popup.js"></script>
 </html>
