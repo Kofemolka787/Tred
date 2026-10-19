@@ -7,6 +7,9 @@ let authorized = false;
 let busy = false;
 let dataClient;
 let toastTimer;
+let refreshFailed = false;
+const usd = value => value === null || value === undefined ? "—" : "$" + Number(value).toLocaleString("en-US", {minimumFractionDigits:2,maximumFractionDigits:2});
+const shortUsd = value => "$" + Number(value).toLocaleString("en-US", {maximumFractionDigits:2});
 const text = (selector, value) => { const element = $(selector); if (element) element.textContent = value; };
 
 function notify(message) {
@@ -71,13 +74,12 @@ function render() {
   text("#wins", stats.wins);
   text("#losses", stats.losses);
   text("#trade-rate", rate);
-  text("#stats-rate", rate);
-  text("#stats-signals", stats.signals);
-  text("#stats-sample", stats.wins + stats.losses ? `Завершённых сигналов: ${stats.wins + stats.losses}` : "Твоя история начинается здесь");
-  text("#stats-data", connection.live ? "Свежие котировки" : "Не подключено");
   text("#profile-id", String(user.id));
   text("#profile-name", user.first_name || "Гость");
   text("#storage-note", current.persistent === false ? "Настройки доступны до закрытия приложения." : "Настройки сохраняются на этом устройстве.");
+  renderAccount();
+  renderGoal();
+  renderTrades();
   const requests = current.mode === "device" ? [] : current.recent_requests;
   $("#requests-section").hidden = !requests.length;
   const list = $("#request-list");
@@ -92,6 +94,61 @@ function render() {
     row.append(title, description);
     list.append(row);
   });
+}
+function renderGoal() {
+  const goal = current.goal || {start:100,target:1000,available:false,progress:0};
+  const risk = current.risk || {config:{daily_loss:10},balance:100,daily_pnl:0,reserved:0};
+  text("#goal-start", shortUsd(goal.start)); text("#goal-target", shortUsd(goal.target));
+  const percent = Math.round(Math.min(1, Math.max(0,goal.progress || 0))*100);
+  $("#goal-fill").style.width = percent+"%";
+  $(".goal-meter").setAttribute("aria-valuenow",String(percent));
+  text("#goal-percent",percent+"%");
+  text("#goal-progress",goal.available ? "Закрытые сделки · реальный счёт" : "Нет данных реального счёта");
+  text("#goal-earned",goal.available ? usd(goal.earned) : "—");
+  text("#goal-remaining",goal.available ? usd(Math.max(0,Number(goal.target)-Number(goal.current))) : "—");
+  text("#goal-stop",usd(risk.config.daily_loss));
+  const milestones = [Number(goal.start), Number(goal.start)+(Number(goal.target)-Number(goal.start))/6, Number(goal.start)+(Number(goal.target)-Number(goal.start))*4/9, Number(goal.target)];
+  $$(".goal-milestones>span").forEach((el,i) => { el.firstChild.textContent = shortUsd(milestones[i]); });
+  text("#paper-status",current.stale ? "Нет связи" : risk.locked ? "Дневной стоп" : risk.running ? "Работает" : "Остановлен");
+  text("#paper-balance",usd(risk.balance)); text("#paper-pnl",usd(risk.daily_pnl)); text("#paper-reserved",usd(risk.reserved));
+  text("#risk-reason",risk.reason || "Перед каждым входом учитываются дневной результат и все открытые ставки.");
+  $("#paper-start").disabled = !!risk.running || !!risk.locked || busy || !!current.stale;
+}
+function renderAccount() {
+  const accounts = current.accounts || [];
+  const fresh = a => !current.stale && a.live && Date.now()/1000-a.updated_at <= 15;
+  text("#account-status",accounts.some(fresh) ? "Данные поступают" : accounts.length ? "Нет свежего обновления" : "Нет связи");
+  $("#unlink-account").hidden = current.mode !== "api";
+  text("#connect-backend",current.mode === "api" ? "Связь и код подключения" : "Подключить кабинет");
+  const list = $("#account-list"); list.replaceChildren();
+  (accounts.length ? accounts : [{balance:null,id:null,mode:null}]).forEach(a => {
+    const card = document.createElement("div"); card.className = "account-card" + (fresh(a) ? " live" : "");
+    const label = document.createElement("span"), balance = document.createElement("strong"), detail = document.createElement("small");
+    label.textContent = a.mode === "real" ? "Реальный счёт · USD" : a.mode === "demo" ? "Демосчёт · USD" : "Баланс Pocket Option";
+    balance.textContent = usd(a.balance);
+    detail.textContent = a.id ? `ID ${a.id} · последнее обновление ${new Date(a.updated_at*1000).toLocaleTimeString()}` : "Счёт ещё не подключён";
+    card.append(label,balance,detail); list.append(card);
+  });
+  text("#analysis-caption",current.connection.live ? `Анализ · доступных пар ${current.catalog?.verified_count || 0}` : "Анализ: ждём подключение данных");
+}
+function fillTrades(selector,trades,paper=false) {
+  const list = $(selector); list.replaceChildren();
+  trades.forEach(t => {
+    const row = document.createElement("div"); row.className="trade-entry";
+    const top=document.createElement("div"), title=document.createElement("strong"), result=document.createElement("strong"), detail=document.createElement("p");
+    title.textContent=t.symbol+" "+(t.direction === "up" ? "↑" : "↓");
+    result.textContent=t.status === "open" ? "Открыта" : t.status === "unresolved" ? "Нет цены закрытия" : usd(t.pnl);
+    result.className=t.status === "win" ? "positive" : t.status === "loss" ? "negative" : "";
+    detail.textContent=`${paper ? "СИМУЛЯЦИЯ" : t.mode === "real" ? "РЕАЛЬНЫЙ СЧЁТ" : "ДЕМО"} · ${usd(t.stake)} · ${new Date(t.opened_at*1000).toLocaleString()}`;
+    top.append(title,result); row.append(top,detail); list.append(row);
+  });
+}
+function renderTrades() {
+  const trades=current.trades || [], paper=current.paper_trades || [];
+  $("#trades-empty").hidden=trades.length>0;
+  text("#trade-summary",trades.length ? "Полученные сделки Pocket Option. Симуляция показана отдельно." : "Подключи счёт, чтобы видеть реальные сделки.");
+  fillTrades("#trade-list",trades); fillTrades("#paper-trade-list",paper,true);
+  $("#paper-trade-section").hidden=!paper.length;
 }
 async function update(changes) {
   if (!authorized || busy) return;
@@ -136,13 +193,17 @@ $("#open-pocket").addEventListener("click", () => {
 });
 $("#request-signal").addEventListener("click", async () => {
   if (!authorized || busy) return;
-  if (current.mode === "device") return soon();
+  if (current.mode === "device") { $("#connect-dialog").showModal(); return; }
   setBusy(true);
   try {
     const result = await api("/api/signal", {});
     current = result.state;
     render();
-    notify(`Сигнал не выдан. ${result.reason}`);
+    text("#analysis-title",result.status === "candidate" ? `${result.symbol} · ${result.direction === "up" ? "ВВЕРХ" : "ВНИЗ"}` : "Подходящего входа пока нет");
+    text("#analysis-result",result.reason);
+    $("#analysis-evidence").replaceChildren();
+    (result.evidence || []).forEach(line => { const li=document.createElement("li"); li.textContent=line; $("#analysis-evidence").append(li); });
+    $("#analysis-dialog").showModal();
   } catch (error) { notify(error.message || "Не удалось выполнить запрос."); }
   finally { setBusy(false); }
 });
@@ -160,6 +221,10 @@ async function bootstrap() {
     authorized = true;
     render();
   } catch (error) {
+    dataClient = window.TredData.deviceClient(telegram);
+    current = await dataClient.request("/api/state");
+    authorized = true;
+    render();
     $("#notice").hidden = false;
     text("#notice", error.message || "Не удалось открыть приложение. Попробуй ещё раз.");
   } finally { setBusy(false); }
@@ -167,5 +232,63 @@ async function bootstrap() {
 bootstrap();
 setInterval(async () => {
   if (!authorized || busy || document.hidden || current?.mode === "device") return;
-  try { current = await api("/api/state"); render(); } catch (error) { notify(error.message || "Не удалось обновить статус."); }
-}, 15000);
+  try { current = await api("/api/state"); refreshFailed=false; $("#notice").hidden=true; render(); }
+  catch (error) {
+    current.stale=true; current.connection.live=false; render();
+    $("#notice").hidden=false; text("#notice","Нет связи с сервером. Показаны последние полученные данные. Управление симуляцией недоступно.");
+    if (!refreshFailed) notify(error.message || "Не удалось обновить статус.");
+    refreshFailed=true;
+  }
+}, 2000);
+
+$("#edit-goal").addEventListener("click", () => {
+  const c=current?.risk?.config || {daily_loss:10,daily_target:20,balance_floor:90,stake:1,max_open:1,goal_start:100,goal_target:1000};
+  for (const [id,key] of [["risk-loss","daily_loss"],["risk-target","daily_target"],["risk-floor","balance_floor"],["risk-stake","stake"],["risk-open","max_open"],["goal-start-input","goal_start"],["goal-target-input","goal_target"]]) $("#"+id).value=c[key];
+  $("#loss-output").value=c.daily_loss; $("#allow-otc").checked=current?.preferences.allow_otc === true;
+  $("#risk-dialog").showModal();
+});
+$("#risk-loss").addEventListener("input", () => { $("#loss-output").value=$("#risk-loss").value; });
+$("#risk-form").addEventListener("submit",async e => {
+  e.preventDefault();
+  try {
+    const config={daily_loss:$("#risk-loss").value,daily_target:$("#risk-target").value,balance_floor:$("#risk-floor").value,stake:$("#risk-stake").value,max_open:Number($("#risk-open").value),max_overlays:0,goal_start:$("#goal-start-input").value,goal_target:$("#goal-target-input").value};
+    current=await api("/api/risk",config);
+    // Old local administrative API lacks allow_otc. New backend and device UI support it.
+    if (current.risk) current=await api("/api/settings",{allow_otc:$("#allow-otc").checked});
+    render(); $("#risk-dialog").close(); notify("Цель и границы сохранены.");
+  } catch(error) { notify(error.message); }
+});
+async function paper(running) {
+  try { current=await api("/api/paper",{running}); render(); notify(running ? "Симуляция запущена. Реальные ордера не отправляются." : "Новые входы симуляции остановлены."); }
+  catch(error) { notify(error.message); }
+}
+$("#paper-start").addEventListener("click", () => paper(true));
+$("#paper-stop").addEventListener("click", () => paper(false));
+$("#show-method").addEventListener("click", () => {
+  text("#analysis-title","Как анализирует TRED");
+  text("#analysis-result","Структура swing-уровней, пробой, снятие локального экстремума и возврат к ценовому разрыву. Условия должны согласоваться на двух таймфреймах. Это правила анализа; обученной нейросети и измеренной проходимости пока нет.");
+  $("#analysis-evidence").replaceChildren(); $("#analysis-dialog").showModal();
+});
+$("#connect-backend").addEventListener("click",async () => {
+  $("#connect-dialog").showModal();
+  if (dataClient?.base) $("#backend-url").value=dataClient.base;
+  if (current?.mode === "api" && current.risk) await pair();
+});
+let pairingTimer;
+async function pair() {
+  try {
+    const result=await api("/api/pair",{});
+    text("#pair-code",result.code); $("#pairing-box").hidden=false;
+    clearTimeout(pairingTimer); pairingTimer=setTimeout(() => { text("#pair-code",""); $("#pairing-box").hidden=true; text("#connect-status","Код истёк. Открой подключение снова."); },result.expires_in*1000);
+  } catch(error) { text("#connect-status",error.message); }
+}
+$("#backend-form").addEventListener("submit",async e => {
+  e.preventDefault(); text("#connect-status","Проверяем сервер…");
+  try {
+    const result=await window.TredData.connect(telegram,$("#backend-url").value.trim());
+    dataClient=result.client; current=result.state; authorized=true; render(); setBusy(false);
+    text("#connect-status","Сервер подключён. Вставь адрес и код в модуль браузера."); await pair();
+  } catch(error) { text("#connect-status",error.message || "Нет связи с сервером."); }
+});
+$("#copy-code").addEventListener("click",async () => { try { await navigator.clipboard.writeText($("#pair-code").textContent); notify("Код скопирован."); } catch(_) { notify("Выдели и скопируй код вручную."); } });
+$("#unlink-account").addEventListener("click",async () => { try { current=await api("/api/unlink",{}); render(); text("#pair-code",""); $("#pairing-box").hidden=true; notify("Ключ модуля отозван. Симуляция остановлена."); } catch(error) { notify(error.message); } });

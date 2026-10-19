@@ -1,0 +1,144 @@
+"""Free local backend + official ephemeral HTTPS tunnel; no account or card."""
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import platform
+import queue
+import re
+import subprocess
+import sys
+import threading
+import time
+from urllib.error import HTTPError, URLError
+from urllib.request import ProxyHandler, build_opener, urlopen
+
+ROOT = Path(__file__).resolve().parent
+RELEASE = "2026.10.1"
+BINARIES = {
+    ("Windows","AMD64"):("cloudflared-windows-amd64.exe","4d2490e74082c5d48dbfedaf92576fa5bd1702379ab88eb7faa0cfbe8dc891b6"),
+    ("Linux","x86_64"):("cloudflared-linux-amd64","3bfc539f45d2620c71debb7a86be0efa737ed5ccbad9eb85c787116900e5c586"),
+}
+
+
+def tunnel_binary():
+    selected = BINARIES.get((platform.system(),platform.machine()))
+    if not selected:
+        raise ValueError("Автозагрузка поддерживает Windows x64 и Linux x64. Для другой системы установи официальный cloudflared вручную.")
+    name, expected = selected
+    tools = ROOT/"tools"; tools.mkdir(exist_ok=True)
+    target = tools/name
+    if target.exists() and hashlib.sha256(target.read_bytes()).hexdigest() == expected:
+        return target
+    temp = target.with_suffix(".download")
+    try:
+        digest = hashlib.sha256()
+        size = 0
+        with urlopen(f"https://github.com/cloudflare/cloudflared/releases/download/{RELEASE}/{name}",timeout=30) as response, temp.open("wb") as out:
+            while block := response.read(1024*1024):
+                size += len(block)
+                if size > 120*1024*1024:
+                    raise ValueError("Неожиданный размер cloudflared.")
+                digest.update(block); out.write(block)
+        if digest.hexdigest() != expected:
+            raise ValueError("Контрольная сумма cloudflared не совпала; запуск отменён.")
+        temp.replace(target)
+        target.chmod(0o700)
+    finally:
+        temp.unlink(missing_ok=True)
+    return target
+
+
+def check_local(port):
+    client = build_opener(ProxyHandler({}))  # Only loopback; public requests retain proxy/TLS.
+    base = f"http://127.0.0.1:{port}"
+    try:
+        with client.open(base+"/healthz",timeout=2) as response:
+            h = json.load(response)
+            if h.get("service") != "tred-backend" or h.get("api_version") != 1:
+                return False
+        try:
+            client.open(base+"/api/state",timeout=2).close()
+        except HTTPError as error:
+            return error.code == 401
+        return False
+    except (URLError,OSError,ValueError):
+        return False
+
+
+def main():
+    parser=argparse.ArgumentParser()
+    parser.add_argument("--port",type=int,default=8790)
+    parser.add_argument("--local-only",action="store_true")
+    parser.add_argument("--check",action="store_true",help="Start, verify health/private API, then stop own process")
+    args=parser.parse_args()
+    if not 1024 <= args.port <= 65535:
+        raise ValueError("Некорректный порт.")
+    if check_local(args.port):
+        raise ValueError("TRED уже работает на этом порту. Используй открытое окно запуска; второй сервер не нужен.")
+    # Verify/download before starting the API, so failures leave no stray process.
+    executable = None if args.local_only else tunnel_binary()
+    backend = subprocess.Popen([sys.executable,"-u",str(ROOT/"backend.py"),"--port",str(args.port)],cwd=ROOT)
+    tunnel = None
+    try:
+        deadline=time.monotonic()+15
+        while not check_local(args.port):
+            if backend.poll() is not None or time.monotonic()>deadline:
+                raise ValueError("Не удалось запустить API. Проверь сообщение сервера выше.")
+            time.sleep(.2)
+        print("TRED API: OK. Без подписи Telegram личные данные недоступны.",flush=True)
+        if args.check:
+            print(json.dumps({"local_api_verified":True,"public_tunnel_verified":False}))
+            return
+        if args.local_only:
+            print("Локальный режим. Для телефона нужен HTTPS-туннель.",flush=True)
+            backend.wait()
+            return
+        tunnel=subprocess.Popen([str(executable),"tunnel","--url",f"http://127.0.0.1:{args.port}","--no-autoupdate"],cwd=ROOT,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,encoding="utf-8",errors="replace")
+        output=queue.Queue()
+        def read():
+            for line in tunnel.stdout:
+                output.put(line[:4000])
+            output.put(None)
+        threading.Thread(target=read,daemon=True).start()
+        deadline=time.monotonic()+60
+        url=None
+        while time.monotonic()<deadline:
+            try: line=output.get(timeout=1)
+            except queue.Empty: continue
+            if line is None: break
+            found=re.search(r"https://[a-z0-9-]+\.trycloudflare\.com",line)
+            if found: url=found[0]; break
+        if not url:
+            raise ValueError("Cloudflare не выдал адрес. Проверь доступность Tunnel в своей сети; личные данные не отправлялись.")
+        # A URL in stdout alone does not establish an operational public route.
+        for attempt in range(15):
+            try:
+                with urlopen(url+"/healthz",timeout=4) as response:
+                    if json.load(response).get("service") == "tred-backend": break
+            except (OSError,ValueError): pass
+            if attempt==14: raise ValueError("Адрес получен, но HTTPS-доступ к API не подтверждён. Туннель остановлен.")
+            time.sleep(1)
+        (ROOT/"server-url.txt").write_text(url+"\n",encoding="utf-8")
+        print("\nВ кабинете TRED нажми «Подключить кабинет» и вставь:\n"+url,flush=True)
+        print("Этот же адрес и одноразовый код укажи в модуле браузера.\nНе закрывай это окно, компьютер и вкладку Pocket Option.\nПосле нового запуска адрес может измениться. Ctrl+C — остановить.",flush=True)
+        # Drain logs without retaining or displaying arbitrary tunnel output.
+        while tunnel.poll() is None and backend.poll() is None:
+            try: output.get(timeout=1)
+            except queue.Empty: pass
+        raise ValueError("Связь завершилась. Новые данные не поступают; запусти TRED заново.")
+    finally:
+        for process in (tunnel,backend):
+            if process is not None and process.poll() is None:
+                process.terminate()
+                try: process.wait(timeout=5)
+                except subprocess.TimeoutExpired: process.kill(); process.wait(timeout=5)
+
+
+if __name__=="__main__":
+    try: main()
+    except KeyboardInterrupt: print("TRED остановлен.")
+    except Exception as error:
+        print(str(error) if isinstance(error,ValueError) else "Запуск не выполнен: "+type(error).__name__,file=sys.stderr)
+        raise SystemExit(1)

@@ -1,0 +1,6 @@
+private/
+.venv/
+tools/
+__pycache__/
+*.log
+server-url.txt
