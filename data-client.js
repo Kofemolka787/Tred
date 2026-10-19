@@ -18,7 +18,7 @@ window.TredData = (() => {
   function deviceClient(telegram) {
     const metadata = telegram?.initDataUnsafe?.user;
     const user = { id: Number.isSafeInteger(metadata?.id) && metadata.id > 0 ? metadata.id : "—",
-                   first_name: typeof metadata?.first_name === "string" ? metadata.first_name.slice(0, 80) : "Пользователь Telegram" };
+                   first_name: typeof metadata?.first_name === "string" ? metadata.first_name.slice(0, 80) : "Гость" };
     const storageKey = `tred.ui.v1.${user.id}`;
     let saved = {};
     try { saved = JSON.parse(localStorage.getItem(storageKey) || "{}"); } catch (_) { /* Corrupt or unavailable local storage. */ }
@@ -37,6 +37,7 @@ window.TredData = (() => {
       recent_requests: [...requests], catalog: { verified_count: 0 }, minimum_expiry: 3,
       mode: "device", persistent, bot_username: "Tr1edBot_bot" });
     return {
+      mode: "device",
       async request(path, changes = {}) {
         if (path === "/api/state") return state();
         if (path === "/api/settings") {
@@ -69,7 +70,7 @@ window.TredData = (() => {
     const config = await response.json();
     if (config.mode === "device") return deviceClient(telegram);
     if (config.mode !== "api") throw new Error("Неизвестный режим приложения.");
-    return { async request(path, body) {
+    return { mode: "api", async request(path, body) {
       const abort = new AbortController();
       const timer = setTimeout(() => abort.abort(), 10000);
       try {

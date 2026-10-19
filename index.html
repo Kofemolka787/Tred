@@ -3,13 +3,14 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#08080f">
-  <title>TRED · демосигналы</title>
+  <meta name="theme-color" content="#08080e">
+  <meta name="description" content="TRED — твоё пространство в Telegram. Выбирай свой формат.">
+  <title>TRED · Mini App</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="./styles.css">
+  <link rel="stylesheet" href="./styles.css?v=0.2">
   <script src="https://telegram.org/js/telegram-web-app.js" defer></script>
-  <script src="./data-client.js" defer></script>
-  <script src="./app.js" defer></script>
+  <script src="./data-client.js?v=0.2" defer></script>
+  <script src="./app.js?v=0.2" defer></script>
 </head>
 <body>
   <svg class="sprite" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
@@ -28,85 +29,74 @@
   <div class="ambient" aria-hidden="true"></div>
   <main class="app">
     <header class="brand-row">
-      <div class="brand"><div class="brand-mark" aria-hidden="true">T<span></span></div><div><h1>TRED</h1><p>сигналы по валютным парам</p></div></div>
-      <div class="feed-badge" id="feed-badge"><i></i><span>Нет котировок</span></div>
+      <div class="brand"><div class="brand-mark" aria-hidden="true">T<span></span></div><div><h1>TRED</h1><p>твой ритм. твой выбор.</p></div></div>
+      <div class="market-badge" id="feed-badge"><i></i><span>OTC-пары</span></div>
     </header>
-    <div class="notice" id="notice" role="status" hidden></div>
-
-    <section class="panel" data-panel="signal">
-      <div class="market-switch" aria-label="Рынок">
-        <button class="settings-control" data-market="normal"><svg><use href="#i-globe"/></svg>Обычный рынок</button>
-        <button class="settings-control active" data-market="otc"><span class="purple-orb"></span>OTC</button>
-      </div>
-      <div class="mode-switch">
-        <div class="mode-label"><svg><use href="#i-target"/></svg><span>SMC</span></div>
-        <button class="settings-control active" data-mode="standard"><span class="purple-orb"></span><span>Стандарт</span></button>
-        <button class="settings-control" data-mode="long"><svg><use href="#i-trend"/></svg><span>Долгосрок</span></button>
-        <button class="unavailable-mode" disabled title="Минимальная экспирация — 3 минуты"><svg><use href="#i-bolt"/></svg><span>Короткий</span></button>
-      </div>
-      <p class="mode-caption" id="mode-caption">OTC · экспирация от 3 минут</p>
-
-      <button class="auto-card selected settings-control" id="auto-card" aria-pressed="true">
-        <span class="target-orbit"><span class="target-center"><svg><use href="#i-target"/></svg></span></span>
-        <span class="auto-copy"><strong>Подобрать пару<br>для входа</strong><span class="auto-subtitle">Найдём подходящие условия</span><span class="data-chip" id="data-chip"><i></i>Ожидаем котировки</span></span>
-        <span class="selection-check"><svg><use href="#i-check"/></svg></span>
-      </button>
-      <button class="manual-link settings-control" id="choose-pair"><span id="pair-label">или выбрать пару самому</span><svg><use href="#i-chevron"/></svg></button>
-
-      <div class="connection-note"><span class="status-dot"></span><p id="connection-reason">Авторизация котировок пока не подтверждена.</p></div>
-
-      <div class="signal-controls">
-        <div class="expiry-switch" id="expiry-switch" aria-label="Экспирация"></div>
-        <button class="signal-button settings-control" id="request-signal"><strong>ПОЛУЧИТЬ СИГНАЛ</strong><span id="signal-subtitle">Автоподбор · 5 минут</span><span class="button-shine" aria-hidden="true"></span></button>
-        <p class="demo-caption"><span></span>Деморежим · вход открываешь сам</p>
-      </div>
-    </section>
-
-    <section class="panel" data-panel="trades" hidden>
-      <p class="eyebrow">МОИ СИГНАЛЫ</p>
-      <div class="stat-tiles">
-        <div class="stat-tile"><strong id="trade-count">0</strong><span>сигналов</span></div>
-        <div class="stat-tile"><strong><b class="positive" id="wins">0</b><em>/</em><b class="negative" id="losses">0</b></strong><span>плюс / минус</span></div>
-        <div class="stat-tile"><strong id="trade-rate">—</strong><span>проходимость</span></div>
-      </div>
-      <div class="empty-card"><svg><use href="#i-clock"/></svg><h2>Здесь будут твои сигналы</h2><p>Сохраним входы и результаты, когда анализ начнёт работать на проверенных данных.</p></div>
-      <div class="requests-section" id="requests-section" hidden><p class="eyebrow">ЗАПРОСЫ АНАЛИЗА</p><div id="request-list"></div></div>
-      <p class="quiet-text">Пропуск входа не считается выигрышем или проигрышем.</p>
-    </section>
-
-    <section class="panel" data-panel="stats" hidden>
-      <p class="eyebrow">РЕЗУЛЬТАТЫ ПРОВЕРКИ</p>
-      <div class="insight-card"><span class="mini-label">ПРОХОДИМОСТЬ НА ДЕМО</span><strong id="stats-rate">—</strong><p id="stats-sample">Пока нет завершённых сигналов</p></div>
-      <div class="metric-row"><span>Сигналов выдано</span><strong id="stats-signals">0</strong></div>
-      <div class="metric-row"><span>Цель исследования</span><strong>от 60%</strong></div>
-      <div class="metric-row"><span>Модель</span><strong class="amber">Не проверена</strong></div>
-      <div class="metric-row"><span>Рыночные данные</span><strong id="stats-data" class="amber">Нет потока</strong></div>
-      <div class="info-card"><svg><use href="#i-target"/></svg><p>60% — цель проверки, а не обещанный результат. Проходимость появится после проверки сигналов на новых данных и демосчёте.</p></div>
-    </section>
-
-    <section class="panel" data-panel="profile" hidden>
-      <button class="guide-link" id="open-guide"><svg><use href="#i-book"/></svg><strong>Как работает TRED</strong><span>коротко о главном</span><svg class="chevron"><use href="#i-chevron"/></svg></button>
-      <div class="profile-card"><div class="profile-card-top"><span>TRED DEMO</span><div class="small-brand">T</div></div><p class="profile-id-label">TELEGRAM ID</p><strong class="profile-id" id="profile-id">—</strong><div class="profile-card-bottom"><div><span>Владелец</span><strong id="profile-name">Личный кабинет</strong></div><div><span>Котировки</span><strong class="amber" id="profile-feed">не подключены</strong></div></div></div>
-      <p class="eyebrow">ТВОЙ ДОСТУП</p>
-      <div class="access-card"><div><strong>Личный доступ</strong><span>Для тебя и приглашённого друга</span></div><span class="access-check"><svg><use href="#i-check"/></svg></span></div>
-      <button class="pocket-link" id="open-pocket">Открыть демосчёт Pocket Option<svg><use href="#i-chevron"/></svg></button>
-      <p class="quiet-text" id="storage-note">В TRED нет подписок, покупок или привязки платёжной карты.</p>
-    </section>
-
+    <div class="workspace" id="workspace">
+      <div class="notice" id="notice" role="status" hidden></div>
+      <section class="panel signal-panel" data-panel="signal" aria-label="Выбор сигнала">
+        <div class="market-switch" aria-label="Рынок">
+          <button class="settings-control" data-market="normal"><svg><use href="#i-globe"/></svg><span>Обычный рынок</span></button>
+          <button class="settings-control active" data-market="otc"><span class="purple-orb"></span><span>OTC</span></button>
+        </div>
+        <div class="mode-switch" aria-label="Формат">
+          <button class="muted-mode" data-soon="SMC"><svg><use href="#i-target"/></svg><span>SMC</span></button>
+          <button class="settings-control active" data-mode="standard"><span class="purple-orb"></span><span>Обычный</span></button>
+          <button class="settings-control" data-mode="long"><svg class="chart-icon"><use href="#i-trend"/></svg><span>Долгосрок</span></button>
+          <button class="muted-mode" data-soon="Короткий формат"><svg class="bolt-icon"><use href="#i-bolt"/></svg><span>Короткий</span></button>
+        </div>
+        <p class="mode-caption" id="mode-caption">OTC · экспирация от 3 минут</p>
+        <button class="auto-card selected settings-control" id="auto-card" aria-pressed="true">
+          <span class="target-orbit" aria-hidden="true"><span class="orbit-arc"></span><span class="target-center">🎯</span></span>
+          <span class="auto-copy"><strong>Лучшая пара<br>для тебя</strong><span class="auto-subtitle">Автоматический выбор</span><span class="data-chip" id="data-chip"><i></i>Автоподбор</span></span>
+          <span class="selection-check"><svg><use href="#i-check"/></svg></span>
+        </button>
+        <button class="manual-link settings-control" id="choose-pair"><span id="pair-label">или выбрать пару самому</span><svg><use href="#i-chevron"/></svg></button>
+        <p id="connection-reason" class="visually-hidden">Торговая логика появится позже.</p>
+        <div class="signal-spacer"></div>
+        <div class="signal-controls">
+          <div class="expiry-switch" id="expiry-switch" aria-label="Экспирация"></div>
+          <button class="signal-button settings-control" id="request-signal"><strong>ПОЛУЧИТЬ СИГНАЛ</strong><span id="signal-subtitle">Автоподбор · 5 мин</span><span class="button-shine" aria-hidden="true"></span></button>
+          <p class="demo-caption"><i></i>Ранняя версия · сигналы скоро</p>
+        </div>
+      </section>
+      <section class="panel" data-panel="trades" hidden>
+        <div class="section-heading"><p class="eyebrow">МОИ СДЕЛКИ</p><span class="quiet-tag">История</span></div>
+        <div class="stat-tiles">
+          <div class="stat-tile"><strong id="trade-count">0</strong><span>сделок</span></div>
+          <div class="stat-tile"><strong><b class="positive" id="wins">0</b><em>/</em><b class="negative" id="losses">0</b></strong><span>плюс / минус</span></div>
+          <div class="stat-tile"><strong id="trade-rate">—</strong><span>проходимость</span></div>
+        </div>
+        <div class="empty-card"><div class="empty-icon"><svg><use href="#i-clock"/></svg></div><h2>Всё ещё впереди</h2><p>Здесь появятся твои сделки.<br>А пока — устраивайся поудобнее.</p></div>
+        <div class="summary-line">Сегодня: <b>0 сделок</b> · <span class="positive">0 плюс</span> / <span class="negative">0 минус</span></div>
+        <div class="requests-section" id="requests-section" hidden><p class="eyebrow">ЗАПРОСЫ</p><div id="request-list"></div></div>
+      </section>
+      <section class="panel" data-panel="stats" hidden>
+        <div class="section-heading"><p class="eyebrow">ТВОЙ ПРОГРЕСС</p><span class="quiet-tag">Обзор</span></div>
+        <div class="insight-card"><div class="trophy-orbit"><svg><use href="#i-cup"/></svg></div><span class="mini-label">КАЖДЫЙ ШАГ ИМЕЕТ ЗНАЧЕНИЕ</span><strong id="stats-rate">—</strong><p id="stats-sample">Твоя история начинается здесь</p></div>
+        <div class="metric-card"><div class="metric-row"><span>Всего сделок</span><strong id="stats-signals">0</strong></div><div class="metric-row"><span>Лучшая серия</span><strong>—</strong></div><div class="metric-row"><span>Результат за сегодня</span><strong>—</strong></div></div>
+        <p class="quiet-text">Результаты появятся, когда добавим торговые возможности.</p><span id="stats-data" hidden></span>
+      </section>
+      <section class="panel" data-panel="profile" hidden>
+        <button class="guide-link" id="open-guide"><span class="guide-emoji">📚</span><strong>Знакомство с TRED</strong><span>что внутри</span><svg class="chevron"><use href="#i-chevron"/></svg></button>
+        <div class="profile-card"><div class="profile-card-top"><span>TRED SPACE</span><div class="small-brand">T</div></div><p class="profile-id-label">ТВОЙ TELEGRAM ID</p><strong class="profile-id" id="profile-id">—</strong><div class="profile-card-bottom"><div><span>Участник</span><strong id="profile-name">Личный кабинет</strong></div><div><span>Статус</span><strong id="profile-feed"><i></i>Ранняя версия</strong></div></div></div>
+        <p class="eyebrow access-heading">ТВОЁ ПРОСТРАНСТВО</p>
+        <div class="access-card"><div><strong>Добро пожаловать</strong><span>Приложение открыто для каждого</span></div><span class="access-check"><svg><use href="#i-check"/></svg></span></div>
+        <button class="pocket-link" id="open-pocket">Открыть Pocket Option<svg><use href="#i-chevron"/></svg></button>
+        <p class="quiet-text" id="storage-note">Настройки сохраняются на этом устройстве.</p>
+        <div class="version-mark"><span class="brand-word">TRED</span><span>создаём шаг за шагом · v0.2</span></div>
+      </section>
+    </div>
     <nav class="bottom-nav" aria-label="Разделы приложения">
       <button class="active" data-tab="signal" aria-current="page"><svg><use href="#i-trend"/></svg><span>Сигнал</span></button>
-      <button data-tab="trades"><svg><use href="#i-clock"/></svg><span>Сигналы</span></button>
-      <button data-tab="stats"><svg><use href="#i-cup"/></svg><span>Результаты</span></button>
+      <button data-tab="trades"><svg><use href="#i-clock"/></svg><span>Сделки</span></button>
+      <button data-tab="stats"><svg><use href="#i-cup"/></svg><span>Топ</span></button>
       <button data-tab="profile"><svg><use href="#i-user"/></svg><span>Кабинет</span></button>
     </nav>
   </main>
-
-  <dialog class="sheet" id="pair-dialog">
-    <div class="sheet-heading"><h2>Выбрать пару</h2><button class="icon-button" data-close="pair-dialog" aria-label="Закрыть"><svg><use href="#i-close"/></svg></button></div>
-    <p>Укажи название с графика Pocket Option. Наличие котировок проверяется отдельно.</p>
-    <form id="pair-form"><label for="pair-input">Валютная пара</label><input id="pair-input" name="symbol" placeholder="EUR/USD" maxlength="32" autocomplete="off" spellcheck="false" required><div class="pair-suggestions"><button type="button" data-symbol="EUR/USD">EUR/USD</button><button type="button" data-symbol="GBP/USD">GBP/USD</button><button type="button" data-symbol="USD/JPY">USD/JPY</button><button type="button" data-symbol="AUD/CAD">AUD/CAD</button></div><button class="primary-small" type="submit">Выбрать</button></form>
-  </dialog>
-  <dialog class="sheet" id="guide-dialog"><div class="sheet-heading"><h2>Как работает TRED</h2><button class="icon-button" data-close="guide-dialog" aria-label="Закрыть"><svg><use href="#i-close"/></svg></button></div><ol class="guide-list"><li><strong>Выбираешь условия</strong><span>Обычный рынок или OTC, пару и экспирацию от 3 минут.</span></li><li><strong>Ждёшь подтверждения</strong><span>Сигнал возможен только при свежих котировках и проверенном анализе.</span></li><li><strong>Открываешь вход сам</strong><span>Бот не совершает сделки и не управляет счётом.</span></li><li><strong>Смотришь результаты</strong><span>История и статистика учитывают реальные сигналы. Пропуски считаются отдельно.</span></li></ol></dialog>
+  <dialog class="sheet" id="pair-dialog"><div class="sheet-handle"></div><div class="sheet-heading"><div><span class="mini-label">ТВОЙ ВЫБОР</span><h2>Валютная пара</h2></div><button class="icon-button" data-close="pair-dialog" aria-label="Закрыть"><svg><use href="#i-close"/></svg></button></div><p>Выбери пару для своего сценария.</p><form id="pair-form"><label for="pair-input">Название пары</label><input id="pair-input" name="symbol" placeholder="Например, EUR/USD" maxlength="32" autocomplete="off" spellcheck="false" required><div class="pair-suggestions"><button type="button" data-symbol="EUR/USD">EUR/USD</button><button type="button" data-symbol="GBP/USD">GBP/USD</button><button type="button" data-symbol="USD/JPY">USD/JPY</button><button type="button" data-symbol="AUD/CAD">AUD/CAD</button><button type="button" data-symbol="EUR/JPY">EUR/JPY</button><button type="button" data-symbol="USD/CHF">USD/CHF</button></div><button class="primary-small" type="submit">Выбрать пару</button></form></dialog>
+  <dialog class="sheet" id="guide-dialog"><div class="sheet-handle"></div><div class="sheet-heading"><h2>Это TRED ✦</h2><button class="icon-button" data-close="guide-dialog" aria-label="Закрыть"><svg><use href="#i-close"/></svg></button></div><p>Твоё пространство в Telegram — на телефоне и компьютере.</p><ol class="guide-list"><li><strong>Выбери свой формат</strong><span>Обычный рынок или OTC, пара и время — всё под рукой.</span></li><li><strong>Осмотрись внутри</strong><span>Сигналы, сделки, прогресс и кабинет в одном приложении.</span></li><li><strong>Дальше — больше</strong><span>Сейчас знакомимся с интерфейсом. Возможности будем добавлять постепенно.</span></li></ol></dialog>
+  <dialog class="sheet soon-sheet" id="soon-dialog"><div class="soon-icon">✦</div><h2>Скоро в TRED</h2><p id="soon-copy">Сигналы появятся в следующих обновлениях.<br>Сейчас можно выбрать формат и познакомиться с приложением.</p><button class="primary-small" data-close="soon-dialog">Буду ждать</button></dialog>
   <div class="toast" id="toast" role="status" hidden></div>
 </body>
 </html>
