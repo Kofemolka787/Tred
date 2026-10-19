@@ -22,12 +22,13 @@ BINARIES = {
 }
 
 
-def tunnel_binary():
+def tunnel_binary(directory=None):
     selected = BINARIES.get((platform.system(),platform.machine()))
     if not selected:
         raise ValueError("Автозагрузка поддерживает Windows x64 и Linux x64. Для другой системы установи официальный cloudflared вручную.")
     name, expected = selected
-    tools = ROOT/"tools"; tools.mkdir(exist_ok=True)
+    tools = ROOT/"tools" if directory is None else Path(directory)
+    tools.mkdir(parents=True,exist_ok=True)
     target = tools/name
     if target.exists() and hashlib.sha256(target.read_bytes()).hexdigest() == expected:
         return target
@@ -72,14 +73,16 @@ def main():
     parser.add_argument("--port",type=int,default=8790)
     parser.add_argument("--local-only",action="store_true")
     parser.add_argument("--check",action="store_true",help="Start, verify health/private API, then stop own process")
+    parser.add_argument("--data-dir",type=Path,default=ROOT/"private")
     args=parser.parse_args()
     if not 1024 <= args.port <= 65535:
         raise ValueError("Некорректный порт.")
     if check_local(args.port):
         raise ValueError("TRED уже работает на этом порту. Используй открытое окно запуска; второй сервер не нужен.")
+    args.data_dir.mkdir(parents=True,exist_ok=True)
     # Verify/download before starting the API, so failures leave no stray process.
-    executable = None if args.local_only else tunnel_binary()
-    backend = subprocess.Popen([sys.executable,"-u",str(ROOT/"backend.py"),"--port",str(args.port)],cwd=ROOT)
+    executable = None if args.local_only else tunnel_binary(args.data_dir/"tools")
+    backend = subprocess.Popen([sys.executable,"-B","-u",str(ROOT/"backend.py"),"--port",str(args.port),"--database",str(args.data_dir/"ledger.sqlite3")],cwd=ROOT)
     tunnel = None
     try:
         deadline=time.monotonic()+15
@@ -120,7 +123,7 @@ def main():
             except (OSError,ValueError): pass
             if attempt==14: raise ValueError("Адрес получен, но HTTPS-доступ к API не подтверждён. Туннель остановлен.")
             time.sleep(1)
-        (ROOT/"server-url.txt").write_text(url+"\n",encoding="utf-8")
+        (args.data_dir/"server-url.txt").write_text(url+"\n",encoding="utf-8")
         print("\nВ кабинете TRED нажми «Подключить кабинет» и вставь:\n"+url,flush=True)
         print("Этот же адрес и одноразовый код укажи в модуле браузера.\nНе закрывай это окно, компьютер и вкладку Pocket Option.\nПосле нового запуска адрес может измениться. Ctrl+C — остановить.",flush=True)
         # Drain logs without retaining or displaying arbitrary tunnel output.

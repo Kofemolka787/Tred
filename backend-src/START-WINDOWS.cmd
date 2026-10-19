@@ -15,11 +15,7 @@ set "TRED_PY=python"
 :python_ready
 %TRED_PY% -c "import sys; assert sys.version_info >= (3,12), 'Python 3.12 or later is required'"
 if errorlevel 1 goto python_required
-if not exist ".venv\Scripts\python.exe" %TRED_PY% -m venv ".venv"
-if errorlevel 1 goto failed
-".venv\Scripts\python.exe" -m pip install --disable-pip-version-check --only-binary=:all: --require-hashes -r "requirements-web.txt"
-if errorlevel 1 goto failed
-".venv\Scripts\python.exe" "free_start.py"
+%TRED_PY% -B "windows_setup.py"
 if errorlevel 1 goto failed
 pause
 exit /b 0
