@@ -15,3 +15,31 @@ def signed_data(key, user_id=101, *, stamp=None, first_name="Тест", bot_id=B
     fields["hash"] = "unused-in-ed25519-test"
     return urlencode(fields)
 
+class FixtureAI:
+    """Structured model contract fixture; never contacts an AI provider."""
+    def __init__(self):
+        self.tasks = {}
+        self.calls = 0
+
+    def status(self, uid=None):
+        return {"configured": uid in (None, 101), "provider": "OpenAI", "model": "fixture-model", "market_only": True}
+
+    def get(self, job_id):
+        return self.tasks.get(job_id)
+
+    def submit(self, job_id, snapshot):
+        from concurrent.futures import Future
+        if job_id not in self.tasks:
+            self.calls += 1
+            future = Future()
+            qualified = snapshot["qualified"]
+            selected = qualified[0] if qualified else None
+            facts = next((p for p in snapshot["pairs"] if selected and p["symbol"] == selected["symbol"]), None)
+            evidence = [{"symbol": selected["symbol"], "period": frame["period"], "time": frame["bar_time"], "explanation": "Подтверждённая структура и реакция на зону на этом периоде."} for frame in facts["frames"]] if facts else []
+            decision = {"action": "enter" if selected else "wait", "symbol": selected["symbol"] if selected else "", "direction": selected["direction"] if selected else "none",
+                        "summary": "Согласованная структура и подтверждённая реакция." if selected else "Нет подтверждённой реакции на зону.", "risk": "На OTC наблюдаются только цены брокера; результат не гарантирован.", "evidence": evidence,
+                        "provider": "OpenAI", "model": "fixture-model", "elapsed_ms": 1, "reviewed_pairs": len(snapshot["pairs"]), "batches": 1}
+            future.set_result({"snapshot": snapshot, "decision": decision})
+            self.tasks[job_id] = future
+        return self.tasks[job_id]
+

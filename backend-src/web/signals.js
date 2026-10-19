@@ -42,6 +42,7 @@ window.TredSignals=(()=>{
   }
   function why(setup){
     const detail=node("details","signal-why");detail.append(node("summary","","Почему этот сценарий"));
+    if(setup.ai)detail.append(node("p","",`${setup.ai.provider} · ${setup.ai.model}: ${setup.ai.summary}`),node("p","","Что учитывать: "+setup.ai.risk));
     const list=node("ol");for(const line of setup.evidence||[])list.append(node("li","",line));detail.append(list);
     detail.append(node("p","","BOS — закрытие за подтверждённым экстремумом. FVG — разрыв между первой и третьей свечой импульса. ATR — средний истинный диапазон свечей. Sweep — вынос экстремума с возвратом."));
     detail.append(node("p","",`Зона входа ${price(setup.entry_low)}–${price(setup.entry_high)}. Отмена сценария: ${setup.direction==="up"?"цена ниже":"цена выше"} ${price(setup.invalidation)}. Это условие пропуска нового входа; сделку у брокера оно не закрывает.`));
@@ -50,6 +51,7 @@ window.TredSignals=(()=>{
   function timer(){
     for(const el of document.querySelectorAll("[data-until]"))el.textContent=duration(Number(el.dataset.until)-now());
     const button=$("#watch-entry");
+    if(chosen&&$("#close-preview"))$("#close-preview").textContent=`Вход в ближайшие ${duration(chosen.valid_until-now())}, пока цена в зоне. Если войти сейчас — завершение примерно ${clock(now()+chosen.expiry*60)}. У брокера выбери длительность ${chosen.expiry} мин и сверь время закрытия.`;
     if(button){
       const state=hooks.getState(),q=state?.feed?.pairs?.find(p=>p.symbol===chosen?.symbol);
       const expired=now()>chosen?.valid_until;
@@ -61,8 +63,17 @@ window.TredSignals=(()=>{
   function show(result){
     chosen=result.status==="candidate"?result:null;
     const host=$("#signal-result");host.replaceChildren();host.hidden=false;
-    if(!chosen){host.append(node("h3","",result.waiting_data?"Не хватает данных для анализа":"Подходящего входа пока нет"),node("p","",result.reason||"Ждём подтверждённые условия."));return;}
-    host.append(node("p","eyebrow",`${result.market==="otc"?"OTC":"ОБЫЧНЫЙ РЫНОК"} · СЦЕНАРИЙ ПО СТРУКТУРЕ`),node("h2","",`${result.symbol} ${result.direction==="up"?"↑ ВВЕРХ":"↓ ВНИЗ"}`),node("p","",`${result.expiry} мин · выплата ${Math.round(result.payout*100)}% · анализ M${result.timeframes[0]/60} + M${result.timeframes[1]/60}`));
+    if(!chosen){
+      const title=result.status==="loading"?(result.phase==="ai"?"ИИ анализирует рынок":"Загружаем данные всех пар"):result.status==="setup_required"?"Подключи ИИ один раз":result.status==="ai_unavailable"?"ИИ пока недоступен":result.status==="cancelled"?"Проверка остановлена":result.waiting_data?"Не хватает данных для анализа":"ИИ не подтвердил вход";
+      host.append(node("h3","",title),node("p","",result.reason||"Ждём подтверждённые условия."));
+      if(result.progress)host.append(node("p","",`Пары: ${result.progress.checked} / ${result.progress.total} с полными данными · история: ${result.progress.history_ready} · свежие котировки: ${result.progress.quoted}`));
+      if(result.status==="loading"){const b=node("button","primary-small","Остановить проверку");b.id="cancel-scan";b.type="button";host.append(b);}
+      if(result.ai){host.append(node("p","",`${result.ai.provider} · ${result.ai.model} · рассмотрено пар: ${result.ai.reviewed_pairs}`),node("p","","Риск/ограничение: "+result.ai.risk));}
+      return;
+    }
+    host.append(node("p","eyebrow",`${result.market==="otc"?"OTC":"ОБЫЧНЫЙ РЫНОК"} · ${result.ai?"ИИ-СЦЕНАРИЙ":"СЦЕНАРИЙ ПО СТРУКТУРЕ"}`),node("h2","",`${result.symbol} ${result.direction==="up"?"↑ ВВЕРХ":"↓ ВНИЗ"}`),node("p","",`${result.expiry} мин · выплата ${Math.round(result.payout*100)}% · анализ M${result.timeframes[0]/60} + M${result.timeframes[1]/60}`));
+    if(result.ai)host.append(node("p","",`${result.ai.provider} · ${result.ai.model} · рассмотрено пар: ${result.ai.reviewed_pairs} · полные данные: ${result.checked_pairs} / ${result.total_pairs}`));
+    const preview=node("p","entry-window");preview.id="close-preview";host.append(preview);
     const canvas=node("div","market-chart");chart(canvas,result);host.append(canvas);
     const status=node("p","entry-window","Окно входа: "),time=node("strong");time.dataset.until=result.valid_until;status.append(time);host.append(status);
     const feedback=node("p","quiet-text");feedback.id="entry-feedback";host.append(feedback);
@@ -94,13 +105,14 @@ window.TredSignals=(()=>{
       list.append(row);
     }
     const suggestions=$(".pair-suggestions");
-    if(feed?.pairs?.length){suggestions.replaceChildren();for(const p of feed.pairs.slice(0,24)){const b=node("button","",`${p.symbol} · ${Math.round(p.payout*100)}%`);b.type="button";b.dataset.symbol=p.symbol;suggestions.append(b);}}
+    if(feed?.pairs?.length){suggestions.replaceChildren();for(const p of feed.pairs){const b=node("button","",`${p.symbol} · ${Math.round(p.payout*100)}%`);b.type="button";b.dataset.symbol=p.symbol;suggestions.append(b);}}
     $("#min-payout").value=state.preferences.min_payout||85;
-    $("#signals-upgrade").hidden=state.mode!=="api"||state.market_data_version===2;
+    $("#signals-upgrade").hidden=state.mode!=="api"||state.market_data_version===3;
+    $("#ai-status").textContent=state.mode!=="api"?"ИИ подключается к твоему серверу TRED.":state.ai?.configured?`ИИ: ${state.ai.provider} · ${state.ai.model}. Ключ настроен; решение проверяется по свежим данным.`:"ИИ ещё не настроен. Запусти SETUP-AI.cmd на компьютере и введи API-ключ локально.";
     const help=$("#feed-help");
     if(feed?.blocked){
       const b=feed.blocked;
-      help.textContent=b.history?`Ожидают историю: ${b.history}. Открой в Pocket график со свечами M1 или M2. Расширение распознаёт обычную и Fast-историю; новые полные свечи собираются из поступающих тиков.`:b.catalog?`Каталог канала недоступен: ${b.catalog}. После обновления расширения перезагрузи вкладку Pocket один раз.`:feed.ready?`Данные готовы по ${feed.ready} парам. Направление появится при подтверждённой реакции на зону; количество пар не гарантирует вход.`:"Проверь в списке выплату, доступность пары и выбранное время сделки.";
+      help.textContent=b.history?`Автозагрузка истории: ожидают данные ${b.history} пар. Расширение само запрашивает свечи; листать графики вручную не нужно. Оставь терминал и сервер открытыми.`:b.catalog?`Каталог канала недоступен: ${b.catalog}. После обновления расширения перезагрузи вкладку Pocket один раз.`:feed.ready?`Данные готовы по ${feed.ready} парам. ИИ сравнит доступные структуры и выберет сценарий либо объяснит пропуск.`:"В каталоге показаны все полученные пары выбранного рынка, включая закрытые и неподходящие по выплате.";
     }
     const sessions=state.signal_sessions||[],pending=sessions.filter(s=>!s.result),container=$("#live-sessions");
     const opened=new Set([...container.querySelectorAll("details[open]")].map(d=>d.dataset.session));container.replaceChildren();

@@ -106,10 +106,10 @@ def handler(ledger, *, public_key=PUBLIC_KEY):
                 if not isinstance(value,dict) or set(value) != {"code"}:
                     raise DomainError("Укажи одноразовый код.")
                 return self.reply(200,ledger.claim(value["code"]))
-            if path == "/api/bridge/events" and post:
+            if path in ("/api/bridge/events", "/api/bridge/scan") and post:
                 auth = self.headers.get("Authorization", "")
                 token = auth[7:] if auth.startswith("Bearer ") else ""
-                return self.reply(200,ledger.ingest(token,self.body()))
+                return self.reply(200,ledger.ingest(token,self.body()) if path.endswith("/events") else ledger.bridge_plan(token,self.body()))
             try:
                 user = verify(self.headers.get("X-Telegram-Init-Data", ""),public_key=public_key)
             except ValueError as error:
@@ -139,6 +139,14 @@ def handler(ledger, *, public_key=PUBLIC_KEY):
             elif path == "/api/signal":
                 result = ledger.signal(uid)
                 return self.reply(200,{**result,"state":ledger.state(user)})
+            elif path in ("/api/scan/start", "/api/scan/poll", "/api/scan/cancel"):
+                if path.endswith("/start"):
+                    if value != {}:
+                        raise DomainError("Некорректный запрос анализа.")
+                    result = ledger.start_scan(uid)
+                else:
+                    result = ledger.poll_scan(uid, value, cancel=path.endswith("/cancel"))
+                return self.reply(200, {**result, "state": ledger.state(user)})
             else:
                 raise DomainError("Действие не найдено.",404)
             self.reply(200,ledger.state(user))

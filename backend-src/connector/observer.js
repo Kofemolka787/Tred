@@ -1,15 +1,15 @@
 "use strict";
-// Observes incoming data and the asset/period/index of history requests only.
-// Never creates broker requests or reads/copies login, cookies or auth frames.
+// Observes data and connects the bounded read-only market scanner to the
+// existing socket. Login, cookies and outgoing auth frames are never copied.
 (() => {
-  if(window.__tredObserverVersion==="0.3.10")return;
-  window.__tredObserverVersion="0.3.10";
+  if(window.__tredObserverVersion==="0.3.11")return;
+  window.__tredObserverVersion="0.3.11";
   const Native = window.WebSocket;
   const contexts=new WeakMap();
   const number = v => typeof v === "number" && Number.isFinite(v);
   const safeSymbol = v => typeof v === "string" && /^[A-Za-z0-9][A-Za-z0-9_./ #-]{1,31}$/.test(v);
   const ts = v => number(v) ? (v > 1e11 ? v / 1000 : v) : null;
-  const emit = events => { for(let i=0;i<events.length;i+=250) window.postMessage({source:"tred-observer-v1",observer_version:"0.3.10",events:events.slice(i,i+250)},location.origin); };
+  const emit = events => { for(let i=0;i<events.length;i+=250) window.postMessage({source:"tred-observer-v1",observer_version:"0.3.11",events:events.slice(i,i+250)},location.origin); };
   const accountId = value => (typeof value === "string" || typeof value === "number" && Number.isSafeInteger(value)) && /^\d{1,20}$/.test(String(value)) && !/^0+$/.test(String(value)) ? String(value) : null;
   const idType = value => value===undefined?"none":value===null||value===""?"empty":value===0||typeof value==="string"&&/^0+$/.test(value)?"zero":accountId(value)?typeof value==="number"?"integer":"digits":Array.isArray(value)?"array":["number","string","boolean","object"].includes(typeof value)?typeof value==="string"?"text":typeof value:"other";
   const identity = async (name,data) => {
@@ -79,8 +79,9 @@
     }
     if (Array.isArray(data) && (name === "updateAssets" || name === "assets")) {
       for (const row of data) {
-        if (!Array.isArray(row) || row.length < 16 || !safeSymbol(row[1]) || row[3] !== "currency" || !number(row[5]) || row[5] < 0 || row[5] > 100 || ![0,1,false,true].includes(row[9]) || ![0,1,false,true].includes(row[14])) continue;
+        if (!Array.isArray(row) || row.length < 16 || !safeSymbol(row[1]) || typeof row[3]!=="string" || !row[3] || !number(row[5]) || row[5] < 0 || row[5] > 100 || ![0,1,false,true].includes(row[9]) || ![0,1,false,true].includes(row[14])) continue;
         const expiries = Array.isArray(row[15]) ? row[15].map(x=>typeof x?.time==="string"&&/^\d+$/.test(x.time)?Number(x.time):x?.time).filter(x=>Number.isInteger(x)&&x>0&&x%60===0).map(x=>x/60) : [];
+        state.catalog.set(row[1],{is_open:!!row[14]});
         events.push({type:"asset",symbol:row[1],market:row[9] ? "otc" : "normal",is_open:!!row[14],payout:row[5]/100,expiries,time:now,feed_id:state.feed});
       }
     }
@@ -102,6 +103,11 @@
         for(const bar of tickBars(rows))events.push({type:"candle",symbol:data.asset,...bar,source_clock:"po-market-native-v1"});
       }
       const accepted=events.length-before;
+      // A tick carries an actual observed price/time. An OHLC close is never
+      // passed off as a live quote merely because history just arrived.
+      const ticks=arrays.flatMap(rows=>rows.slice(-60000).map(r=>Array.isArray(r)&&r.length===2?{time:ts(r[0]),price:r[1]}:r&&number(r.price)?{time:ts(r.time??r.timestamp),price:r.price}:null)).filter(r=>r&&number(r.time)&&number(r.price)&&r.price>0);
+      if(ticks.length){const last=ticks.reduce((a,b)=>a.time>b.time?a:b);events.push({type:"quote",symbol:data.asset,...last,feed_id:state.feed,source_clock:"po-market-native-v1"});}
+      window.__tredMarketScanner?.received(state,data,period);
       events.push({type:"history_status",symbol:data.asset,event:name,period:Number.isInteger(period)&&period>0&&period<=86400?period:0,rows:Math.min(rowCount,60000),bars:Math.min(accepted,10000),code:accepted?ohlcRows?"ohlc":"ticks":!rowCount?"empty":period===null?"period_missing":![60,120,300,600,900].includes(period)?"unsupported_period":"format_unrecognized",time:now});
     }
 
@@ -135,11 +141,12 @@
       try { host = new URL(args[0]).hostname; } catch (_) { return; }
       if (!(host === "po.market" || host.endsWith(".po.market"))) return;
       const state = {uid:null,idStatus:"missing",idField:null,idFingerprint:null,idShape:{uid:"none",accountId:"none"},currencies:{},account:null,stream:crypto.randomUUID()};
-      state.feed=crypto.randomUUID();state.requests=new Map();contexts.set(this,state);
+      state.feed=crypto.randomUUID();state.requests=new Map();state.catalog=new Map();contexts.set(this,state);
+      window.__tredMarketScanner?.attach(this,state,frame=>Native.prototype.send.call(this,frame));
       let pending = null;
       let queue = Promise.resolve();
       // Keep close after messages already being decoded (including Blobs).
-      this.addEventListener("close",()=>{queue=queue.then(()=>emit([{type:"feed",feed_id:state.feed,connected:false,time:Date.now()/1000}]));return queue;});
+      this.addEventListener("close",()=>{window.__tredMarketScanner?.close(state.feed);queue=queue.then(()=>emit([{type:"feed",feed_id:state.feed,connected:false,time:Date.now()/1000}]));return queue;});
       this.addEventListener("message", event => {
         queue = queue.then(async () => {
           let frame = event.data;

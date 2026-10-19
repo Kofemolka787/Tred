@@ -9,6 +9,7 @@ let dataClient;
 let toastTimer;
 let refreshFailed = false;
 let stateGeneration = 0;
+let activeScan = null;
 const usd = value => value === null || value === undefined ? "—" : "$" + Number(value).toLocaleString("en-US", {minimumFractionDigits:2,maximumFractionDigits:2});
 const shortUsd = value => "$" + Number(value).toLocaleString("en-US", {maximumFractionDigits:2});
 const text = (selector, value) => { const element = $(selector); if (element) element.textContent = value; };
@@ -49,14 +50,14 @@ function render() {
     button.classList.toggle("active", active);
     button.setAttribute("aria-pressed", String(active));
   });
-  text("#feed-badge span", prefs.market === "otc" ? "OTC-пары" : "Валютные пары");
+  text("#feed-badge span", prefs.market === "otc" ? "OTC-пары" : "Обычный рынок");
   $("#feed-badge").classList.toggle("normal", prefs.market === "normal");
   text("#mode-caption", `${market} · ${mode === "long" ? "сделка на 15 минут" : "сделки на 5 и 10 минут"}`);
   const automatic = prefs.selection === "auto";
   $("#auto-card").classList.toggle("selected", automatic);
   $("#auto-card").setAttribute("aria-pressed", String(automatic));
   text("#pair-label", automatic ? "или выбрать пару самому" : `${prefs.symbol} · сменить пару`);
-  text("#signal-subtitle", `${automatic ? "Лучшая " + (prefs.market === "otc" ? "OTC-пара" : "валютная пара") : prefs.symbol} · ${prefs.expiry} мин`);
+  text("#signal-subtitle", `${automatic ? "ИИ · все доступные пары" : prefs.symbol} · ${prefs.expiry} мин`);
   $("#data-chip").replaceChildren(document.createElement("i"), document.createTextNode(automatic ? "Автоподбор" : "Ручной выбор"));
   text("#connection-reason", connection.reason);
   const expirySwitch = $("#expiry-switch");
@@ -200,17 +201,31 @@ $("#open-pocket").addEventListener("click", () => {
 $("#request-signal").addEventListener("click", async () => {
   if (!authorized || busy) return;
   if (current.mode === "device") { $("#connect-dialog").showModal(); return; }
-  if(current.market_data_version!==2){notify("Обнови сервер до 0.3.15 — инструкция в кабинете.");return;}
+  if(current.market_data_version!==3){notify("Обнови сервер до 0.3.16 — инструкция в кабинете.");return;}
+  const ticket={cancelled:false,client:dataClient,generation:connectGeneration,id:null};activeScan=ticket;
   setBusy(true);
   try {
     text("#request-signal strong","ПРОВЕРЯЕМ ДАННЫЕ…");
-    const result = await api("/api/signal", {});
-    current = result.state;
-    render();
-    window.TredSignals.show(result);
-    $("#signal-result").scrollIntoView({block:"start",behavior:"smooth"});
+    let result = await api("/api/scan/start", {}),first=true;
+    while(!ticket.cancelled&&ticket.client===dataClient&&ticket.generation===connectGeneration){
+      ticket.id=result.scan_id;
+      current=result.state;render();window.TredSignals.show(result);
+      if(first){$("#signal-result").scrollIntoView({block:"start",behavior:"smooth"});first=false;}
+      if(result.status!=="loading")break;
+      text("#request-signal strong",result.phase==="ai"?"ИИ АНАЛИЗИРУЕТ…":"ЗАГРУЖАЕМ РЫНОК…");
+      await new Promise(resolve=>setTimeout(resolve,2000));
+      if(ticket.cancelled||ticket.client!==dataClient||ticket.generation!==connectGeneration)break;
+      result=await api("/api/scan/poll",{scan_id:ticket.id});
+    }
   } catch (error) { notify(error.message || "Не удалось выполнить запрос."); }
-  finally { setBusy(false);text("#request-signal strong","ПОЛУЧИТЬ СИГНАЛ"); }
+  finally { if(activeScan===ticket){activeScan=null;setBusy(false);text("#request-signal strong","ПОЛУЧИТЬ СИГНАЛ");} }
+});
+document.addEventListener("click",async event=>{
+  if(!event.target.closest("#cancel-scan")||!activeScan)return;
+  const ticket=activeScan;ticket.cancelled=true;
+  try{if(ticket.id&&ticket.client===dataClient){const result=await api("/api/scan/cancel",{scan_id:ticket.id});if(ticket.client===dataClient){current=result.state;render();window.TredSignals.show({status:"cancelled",reason:"Проверка остановлена."});}}}
+  catch(_){notify("Проверка закрыта. Уже отправленный запрос OpenAI может завершиться.");}
+  finally{if(activeScan===ticket){activeScan=null;setBusy(false);text("#request-signal strong","ПОЛУЧИТЬ СИГНАЛ");}}
 });
 async function bootstrap() {
   try {

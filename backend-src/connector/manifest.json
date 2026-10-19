@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "TRED · связь с Pocket Option",
-  "version": "0.3.10",
-  "description": "Передаёт выбранные данные открытого Pocket Option в ваш TRED. Торговых команд нет.",
+  "version": "0.3.11",
+  "description": "Автоматически собирает котировки и историю доступных пар для TRED. Торговых команд нет.",
   "permissions": [
     "storage",
     "scripting"
@@ -25,6 +25,7 @@
         "https://*.pocketoption.com/*"
       ],
       "js": [
+        "market-scan.js",
         "observer.js"
       ],
       "run_at": "document_start",

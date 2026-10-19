@@ -1,6 +1,6 @@
 "use strict";
-importScripts("time-check.js","account-check.js");
-const WORKER_VERSION="0.3.10";
+importScripts("time-check.js","account-check.js","scan-worker.js");
+const WORKER_VERSION="0.3.11";
 const endpoint=value=>{
   const u=new URL(value);
   if(u.protocol!=="https:"||!/^[a-z0-9-]+\.trycloudflare\.com$/.test(u.hostname)||u.port||u.username||u.password||u.search||u.hash||u.pathname!=="/")throw new Error("Укажи HTTPS-адрес своего TRED-туннеля.");
@@ -222,7 +222,7 @@ chrome.runtime.onMessage.addListener((message,sender,reply)=>{
         retryAccounts.delete(key);
         if(!TredTime.problem(event,Date.now()/1000))queue.push(event);
       }
-      await flush();return {ok:true};
+      await flush();await TredScan.sync(post,endpoint);return {ok:true};
     }
     if(message.action==="events"&&fromPocket(sender)&&Array.isArray(message.events)){
       const events=message.events.slice(0,250).filter(event=>{
@@ -236,6 +236,7 @@ chrome.runtime.onMessage.addListener((message,sender,reply)=>{
         while(streamTabs.size>20)streamTabs.delete(streamTabs.keys().next().value);
         return true;
       });
+      TredScan.remember(events,sender);
       queue.push(...events);
       // A queued catalog must not revive its socket after close was delivered
       // first by the priority queue. Other sockets and balances stay intact.
@@ -258,7 +259,7 @@ async function attachOpenTerminals(){
     const tabs=await chrome.tabs.query({url:["https://pocketoption.com/*","https://*.pocketoption.com/*"]});
     for(const tab of tabs){
       if(!Number.isInteger(tab.id)||!/^https:\/\/([a-z0-9-]+\.)*pocketoption\.com\/(?:[a-z]{2}\/)?cabinet\//i.test(tab.url||""))continue;
-      await chrome.scripting.executeScript({target:{tabId:tab.id},world:"MAIN",files:["observer.js"]});
+      await chrome.scripting.executeScript({target:{tabId:tab.id},world:"MAIN",files:["market-scan.js","observer.js"]});
       await chrome.scripting.executeScript({target:{tabId:tab.id},world:"ISOLATED",files:["balance-read.js","relay.js"]});
     }
   }catch(_){/* Next popup status retries; no credentials or raw errors logged. */}

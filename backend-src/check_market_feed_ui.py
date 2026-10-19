@@ -13,15 +13,15 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from playwright.sync_api import expect,sync_playwright
 from backend import handler
 from trading_core import Ledger
-from test_support import signed_data
+from test_support import signed_data,FixtureAI
 from test_market_analysis import fixture
 
 ROOT=Path(__file__).resolve().parent
 with tempfile.TemporaryDirectory(prefix='tred-feed-ui-') as temporary:
     current=[1800000000.0]
-    ledger=Ledger(Path(temporary)/'db.sqlite3',clock=lambda:current[0])
+    ledger=Ledger(Path(temporary)/'db.sqlite3',clock=lambda:current[0],ai=FixtureAI())
     token=ledger.claim(ledger.pair(101)['code'])['token']
-    ledger.settings(101,{'market':'otc','allow_otc':True})
+    ledger.settings(101,{'market':'otc','allow_otc':True,'selection':'manual','symbol':'PAIR0_otc'})
     key=Ed25519PrivateKey.generate()
     Parent=handler(ledger,public_key=key.public_key().public_bytes_raw())
     class FixtureHandler(Parent):
@@ -67,6 +67,8 @@ with tempfile.TemporaryDirectory(prefix='tred-feed-ui-') as temporary:
                 page.locator('#request-signal').click()
                 expect(page.locator('#signal-result')).to_contain_text('80')
                 assert page.locator('#watch-entry').count()==0
+                page.locator('#cancel-scan').click()
+                expect(page.locator('#signal-result')).to_contain_text('Проверка остановлена')
                 # Actual Fast binary name, actual attachment, no canonical candles
                 # injected directly into the worker or database.
                 for period in (60,300):

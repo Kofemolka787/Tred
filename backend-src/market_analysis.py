@@ -199,7 +199,7 @@ def rank(assets, histories, *, expiry, market, symbol, allow_otc, now, min_payou
                             "channel": first["channel"], "invalidation": first["invalidation"], "atr": first["atr"],
                             "entry_low": price-.35*first["atr"], "entry_high": price+.35*first["atr"],
                             "catalog_age": status["catalog_age"], "catalog_source": status["catalog_source"],
-                            "bar_time": first["bar_time"], "candles": bars[0][-60:]})
+                            "bar_time": first["bar_time"], "context_bar_time": context["bar_time"], "candles": bars[0][-60:]})
         else:
             reason=next((a["reason"] for a in analyses if not a.get("context_ready")), first["reason"] if first["status"] != "candidate" else "Таймфреймы расходятся: вход пропущен.")
             rejected.append((6 if all(a.get("history_ready") for a in analyses) else 5,reason))
@@ -225,4 +225,4 @@ def coverage(assets, histories, *, market, expiry, min_payout, now):
     stages={name:sum(r["stage"]==name for r in rows) for name in ("closed","payout","expiry","catalog","quote","history","structure")}
     return {"blocked":stages,"catalog": len(rows), "eligible": sum(r["eligible"] for r in rows), "quoted": sum(r["quote_live"] for r in rows),
             "ready": sum(r["eligible"] and r["quote_live"] and r["history_ready"] for r in rows),
-            "timeframes": list(periods), "pairs": sorted(rows, key=lambda r: (-r["eligible"], -r["quote_live"], -r["payout"], r["symbol"]))[:100]}
+            "timeframes": list(periods), "pairs": sorted(rows, key=lambda r: (-r["eligible"], -r["quote_live"], -r["payout"], r["symbol"]))}

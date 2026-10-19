@@ -14,13 +14,13 @@ from playwright.sync_api import expect,sync_playwright
 
 from backend import handler
 from test_market_analysis import fixture
-from test_support import signed_data
+from test_support import signed_data,FixtureAI
 from trading_core import Ledger
 
 ROOT=Path(__file__).resolve().parent
 with tempfile.TemporaryDirectory(prefix="tred-signal-ui-") as temporary:
     current=[float(int(time.time()//900)*900)]
-    ledger=Ledger(Path(temporary)/"ledger.sqlite3",clock=lambda:current[0])
+    ledger=Ledger(Path(temporary)/"ledger.sqlite3",clock=lambda:current[0],ai=FixtureAI())
     token=ledger.claim(ledger.pair(101)["code"])["token"]
     asset={"type":"asset","symbol":"EURUSD_otc","market":"otc","is_open":True,"payout":.92,"expiries":[5,10,15],"time":current[0]}
     ledger.ingest(token,{"events":[asset,{"type":"quote","symbol":"EURUSD_otc","price":106.30,"time":current[0]},{"type":"account","account_id":"456","mode":"real","currency":"USD","balance":"94.00","time":current[0]}]})
@@ -53,6 +53,8 @@ with tempfile.TemporaryDirectory(prefix="tred-signal-ui-") as temporary:
             desktop.locator("#request-signal").click()
             expect(desktop.locator("#signal-result")).to_contain_text("нужны 80 закрытых свечей")
             assert desktop.locator("#watch-entry").count()==0
+            desktop.locator("#cancel-scan").click()
+            expect(desktop.locator("#signal-result")).to_contain_text("Проверка остановлена")
             bars=[{"type":"candle","symbol":"EURUSD_otc","period":period,**row} for period in (60,300,900) for row in fixture(period,int(current[0]))]
             for i in range(0,len(bars),200):ledger.ingest(token,{"events":bars[i:i+200]})
             current[0]+=3

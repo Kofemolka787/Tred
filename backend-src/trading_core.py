@@ -17,6 +17,8 @@ import time
 from market_analysis import rank, coverage
 from signal_sessions import SCHEMA, SignalSessions
 from market_feed import FEED_ID, migrate as migrate_feed, live_tick, catalog_current
+from market_scanner import MarketScanner, SCHEMA as SCAN_SCHEMA
+from ai_market import OpenAIAnalyzer
 
 
 class DomainError(ValueError):
@@ -65,9 +67,10 @@ def digest(value):
     return hashlib.sha256(value.encode()).hexdigest()
 
 
-class Ledger(SignalSessions):
-    def __init__(self, path, *, clock=time.time):
+class Ledger(SignalSessions, MarketScanner):
+    def __init__(self, path, *, clock=time.time, ai=None):
         self.path, self.clock = Path(path), clock
+        self.ai = ai if ai is not None else OpenAIAnalyzer(self.path.parent)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.db() as db:
             db.executescript("""
@@ -83,6 +86,7 @@ class Ledger(SignalSessions):
             CREATE TABLE IF NOT EXISTS analysis(id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, created_at REAL NOT NULL, result TEXT NOT NULL);
             """)
             db.executescript(SCHEMA)
+            db.executescript(SCAN_SCHEMA)
             migrate_feed(db)
             if "run_day" not in {r[1] for r in db.execute("PRAGMA table_info(risk)")}:
                 db.execute("ALTER TABLE risk ADD COLUMN run_day INTEGER")
@@ -138,6 +142,8 @@ class Ledger(SignalSessions):
             db.execute("DELETE FROM candles WHERE user_id=?", (uid,))
             db.execute("DELETE FROM quote_samples WHERE user_id=?", (uid,))
             db.execute("DELETE FROM live_bars WHERE user_id=?", (uid,))
+            db.execute("DELETE FROM scan_bridge WHERE user_id=?", (uid,))
+            db.execute("DELETE FROM scan_jobs WHERE user_id=?", (uid,))
             db.execute("UPDATE risk SET running=0,reason='Связь отключена' WHERE user_id=?", (uid,))
 
     def settings(self, uid, changes):
@@ -458,4 +464,4 @@ class Ledger(SignalSessions):
                 "goal":{"start":amount(start), "target":amount(target), "earned":amount(goal_pnl), "current":amount(start+goal_pnl), "progress":max(0,min(1,goal_pnl/(target-start))), "source":"observed_real_settlements", "available":real_account is not None},
                 "statistics":{"signals":sum(outcomes.values()),"wins":wins,"losses":losses,"draws":outcomes.get("draw",0),"win_rate":wins/(wins+losses) if wins+losses else None},
                 "connection":{"authenticated":paired,"live":live,"model_ready":False,"reason":"Котировки поступают. Анализ по проверяемым правилам структуры." if live else "Подключи модуль браузера для котировок, баланса и сделок."},
-                "signal_sessions":sessions, "signal_version":1, "market_data_version":2, "feed":feed, "recent_requests":recent, "catalog":{"verified_count":count}, "minimum_expiry":5, "bot_username":"Tr1edBot_bot", "server_time":now}
+                "signal_sessions":sessions, "signal_version":1, "market_data_version":3, "ai":self.ai.status(uid), "feed":feed, "recent_requests":recent, "catalog":{"verified_count":count}, "minimum_expiry":5, "bot_username":"Tr1edBot_bot", "server_time":now}
