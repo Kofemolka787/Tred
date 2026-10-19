@@ -110,5 +110,13 @@ setImmediate(async()=>{
   assert(resumed.every(x=>x.source_account===key),'Account identity survives socket reconnect and repeated auth');
   assert.equal(resumed.at(-1).balance,'109');assert.equal(sent.length,0);
   assert(!JSON.stringify(forwarded).includes('opaque-user'));
-  console.log(JSON.stringify({ok:true,fixture_protocol:true,auth_fields_not_exported:true,no_outbound_commands:true,binary_quotes_decoded:true,incomplete_settlements_ignored:true,source_clock_tagged_without_timestamp_changes:true,account_identity_scoped_to_socket:true,split_metadata_and_unframed_balance:true,missing_currency_not_guessed_and_mode_scoped_to_socket:true,primary_uid_not_compared_with_secondary_ids:true,empty_uid_keeps_authenticated_identity:true,unsupported_id_shape_has_no_raw_values:true,changed_opaque_id_rotates_context:true,reauth_rotates_stream_but_retains_account_identity:true}));
+  forwarded=[];
+  const historyRows=Array.from({length:1605},(_,i)=>({time:Math.floor(Date.now()/60000)*60-(1605-i)*60,open:1.1,close:1.2,high:1.3,low:1.0}));
+  await reconnect.emit('42'+JSON.stringify(["loadHistoryPeriod",{asset:"EURUSD",period:60,candles:historyRows}]));
+  const largeHistory=forwarded.flatMap(x=>x.events);
+  assert.equal(largeHistory.length,1600,"Long observed histories must not truncate at 200/250 bars");
+  assert(forwarded.every(x=>x.events.length<=250));
+  assert.equal(largeHistory[0].time,historyRows[5].time);assert.equal(largeHistory.at(-1).time,historyRows.at(-1).time);
+  assert.equal(sent.length,0);
+  console.log(JSON.stringify({ok:true,history_1600_batched_without_loss:true,fixture_protocol:true,auth_fields_not_exported:true,no_outbound_commands:true,binary_quotes_decoded:true,incomplete_settlements_ignored:true,source_clock_tagged_without_timestamp_changes:true,account_identity_scoped_to_socket:true,split_metadata_and_unframed_balance:true,missing_currency_not_guessed_and_mode_scoped_to_socket:true,primary_uid_not_compared_with_secondary_ids:true,empty_uid_keeps_authenticated_identity:true,unsupported_id_shape_has_no_raw_values:true,changed_opaque_id_rotates_context:true,reauth_rotates_stream_but_retains_account_identity:true}));
 });

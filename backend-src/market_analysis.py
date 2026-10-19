@@ -1,90 +1,204 @@
-"""Causal price-action research, never a calibrated probability or order sender."""
+"""Causal, explainable price-action rules. No fitted model or win probability.
+
+OB, FVG and liquidity sweeps describe candle patterns, not actual OTC orders.
+Only completed, contiguous bars and already-confirmed pivots are considered.
+"""
 import math
+
+
+PERIODS = {5: (60, 300), 10: (60, 300), 15: (300, 900)}
 
 
 def finite(value):
     return type(value) in (int, float) and math.isfinite(value)
 
 
+def aggregate(rows, source, target, now):
+    """Never fill gaps or synthesize bars from a partial interval."""
+    groups = {}
+    for row in rows:
+        if row["time"] + source <= now:
+            start = int(row["time"] // target) * target
+            groups.setdefault(start, {})[row["time"]] = row
+    result = []
+    for start, group in sorted(groups.items()):
+        expected = [start + i * source for i in range(target // source)]
+        if start + target > now or set(group) != set(expected):
+            continue
+        bars = [group[t] for t in expected]
+        result.append({"time": start, "open": bars[0]["open"], "close": bars[-1]["close"],
+                       "high": max(b["high"] for b in bars), "low": min(b["low"] for b in bars)})
+    return result
+
+
+def history(histories, pair, period, now):
+    native = histories.get((pair, period), [])
+    derived = aggregate(histories.get((pair, 60), []), 60, period, now) if period > 60 else []
+    # Prefer native OHLC for an existing timestamp; never mix users or symbols.
+    return sorted({r["time"]: r for r in [*derived, *native]}.values(), key=lambda r: r["time"])
+
+
 def analyze(candles, period, now):
-    """Only completed, contiguous candles. Pivots require two confirming bars."""
-    rows = sorted(candles, key=lambda x: x["time"])
-    rows = [x for x in rows if x["time"] + period <= now]
+    rows = sorted((r for r in candles if r["time"] + period <= now), key=lambda r: r["time"])[-160:]
     if len(rows) < 80:
-        return {"status": "skipped", "reason": "Нужно минимум 80 закрытых свечей на каждом таймфрейме."}
-    rows = rows[-160:]
+        return {"status": "skipped", "reason": f"Нужно 80 закрытых свечей M{period//60}; получено {len(rows)}.", "bars": len(rows)}
+    if any(not all(finite(r[k]) and 0 < r[k] <= 1e9 for k in ("open", "high", "low", "close")) or r["low"] > min(r["open"], r["close"]) or r["high"] < max(r["open"], r["close"]) for r in rows):
+        return {"status": "skipped", "reason": "Некорректная история OHLC."}
     if now - (rows[-1]["time"] + period) > period + 10:
         return {"status": "skipped", "reason": "История свечей устарела."}
     if any(abs(b["time"] - a["time"] - period) > 1 for a, b in zip(rows, rows[1:])):
         return {"status": "skipped", "reason": "В истории есть пропуски свечей."}
     highs, lows = [], []
-    # The last two bars cannot be pivots yet. The current last bar is never
-    # used to identify a level it is simultaneously breaking.
-    for i in range(2, len(rows) - 3):
+    for i in range(2, len(rows) - 2):
         window = rows[i-2:i+3]
         if all(rows[i]["high"] > r["high"] for j, r in enumerate(window) if j != 2):
-            highs.append(rows[i]["high"])
+            highs.append((i, rows[i]["high"]))
         if all(rows[i]["low"] < r["low"] for j, r in enumerate(window) if j != 2):
-            lows.append(rows[i]["low"])
+            lows.append((i, rows[i]["low"]))
     close = rows[-1]["close"]
-    fast = sum(x["close"] for x in rows[-20:]) / 20
-    slow = sum(x["close"] for x in rows[-50:]) / 50
-    atr = sum(max(x["high"]-x["low"], abs(x["high"]-p["close"]), abs(x["low"]-p["close"]))
-              for p, x in zip(rows[-15:-1], rows[-14:])) / 14
-    if atr <= 0:
-        return {"status": "skipped", "reason": "Нет измеримого движения цены."}
-    direction = "up" if fast > slow and close > fast else "down" if fast < slow and close < fast else None
-    if not direction or len(highs) < 2 or len(lows) < 2:
-        return {"status": "skipped", "reason": "Нет подтверждённой направленной структуры."}
+    fast = sum(r["close"] for r in rows[-20:]) / 20
+    slow = sum(r["close"] for r in rows[-50:]) / 50
+    atr = sum(max(b["high"] - b["low"], abs(b["high"] - a["close"]), abs(b["low"] - a["close"]))
+              for a, b in zip(rows[-15:-1], rows[-14:])) / 14
+    if atr <= 0 or len(highs) < 2 or len(lows) < 2:
+        return {"status": "skipped", "reason": "Нет двух подтверждённых максимумов и минимумов.", "history_ready": True}
+    direction = "up" if highs[-1][1] > highs[-2][1] and lows[-1][1] > lows[-2][1] else "down" if highs[-1][1] < highs[-2][1] and lows[-1][1] < lows[-2][1] else None
+    aligned = direction == "up" and close > fast > slow or direction == "down" and close < fast < slow
+    if not direction or not aligned:
+        return {"status": "skipped", "reason": "Экстремумы и направленность цены не согласованы.", "history_ready": True}
     up = direction == "up"
-    structure = highs[-1] > highs[-2] and lows[-1] > lows[-2] if up else highs[-1] < highs[-2] and lows[-1] < lows[-2]
-    broken = close > highs[-1] if up else close < lows[-1]
-    sweep = any(x["low"] < min(p["low"] for p in rows[i-10:i]) and x["close"] > min(p["low"] for p in rows[i-10:i])
-                if up else x["high"] > max(p["high"] for p in rows[i-10:i]) and x["close"] < max(p["high"] for p in rows[i-10:i])
-                for i, x in enumerate(rows) if len(rows)-5 <= i < len(rows))
+    evidence = ["HH/HL: максимумы и минимумы повышаются." if up else "LH/LL: максимумы и минимумы понижаются.",
+                "Цена и средние 20/50 подтверждают направление; средние используются только как фильтр."]
+    zones, events = [], []
+    sweep = False
+    for i in range(len(rows) - 5, len(rows)):
+        r = rows[i]
+        level = min(x["low"] for x in rows[i-10:i]) if up else max(x["high"] for x in rows[i-10:i])
+        if r["low"] < level < r["close"] if up else r["high"] > level > r["close"]:
+            sweep = True
+            events.append({"kind": "sweep", "time": r["time"], "level": level})
+    if sweep:
+        evidence.append("Вынос локального экстремума и закрытие обратно в диапазон: ценовой признак sweep, без данных о реальных стопах.")
+    # A displacement must break a pivot that was confirmed BEFORE that bar.
+    ob = False
+    for i in range(max(5, len(rows) - 12), len(rows) - 1):
+        pivots = [(j, v) for j, v in (highs if up else lows) if j + 2 < i]
+        if not pivots:
+            continue
+        level = pivots[-1][1]
+        r, previous = rows[i], rows[i-1]
+        broke = previous["close"] <= level < r["close"] if up else previous["close"] >= level > r["close"]
+        displaced = abs(r["close"] - r["open"]) >= .8 * atr and (r["close"] > r["open"]) == up
+        if not broke or not displaced:
+            continue
+        events.append({"kind": "bos", "time": r["time"], "level": level})
+        opposite = [j for j in range(max(0, i - 6), i) if (rows[j]["close"] < rows[j]["open"]) == up and rows[j]["close"] != rows[j]["open"]]
+        if not opposite:
+            continue
+        block = rows[opposite[-1]]
+        lo, hi = block["low"], block["high"]
+        after = rows[i+1:]
+        intact = all(x["close"] >= lo if up else x["close"] <= hi for x in after)
+        reaction = any(x["low"] <= hi and x["high"] >= lo and (x["close"] > hi if up else x["close"] < lo) for x in after[-3:])
+        if intact and reaction:
+            ob = True
+            zones.append({"kind": "order_block", "low": lo, "high": hi, "time": block["time"]})
+    if ob:
+        evidence.append("BOS с импульсом ≥0,8 ATR и возврат к последней противоположной свече: реакция на предполагаемый order block. Это ценовая модель, не подтверждённая заявка крупного участника.")
     gap = False
-    for i in range(max(2, len(rows)-12), len(rows)-1):
+    for i in range(max(2, len(rows) - 12), len(rows) - 1):
         a, b, c = rows[i-2:i+1]
-        if up and c["low"] > a["high"]:
-            gap |= all(x["close"] >= a["high"] for x in rows[i+1:]) and any(x["low"] <= c["low"] and x["close"] > c["low"] for x in rows[i+1:])
-        elif not up and c["high"] < a["low"]:
-            gap |= all(x["close"] <= a["low"] for x in rows[i+1:]) and any(x["high"] >= c["high"] and x["close"] < c["high"] for x in rows[i+1:])
-    stretched = abs(close - fast) > 3 * atr
-    evidence = ["Средние 20/50 согласованы с ценой"]
-    for condition, label in [(structure, "Повышающиеся экстремумы" if up else "Понижающиеся экстремумы"),
-                             (broken, "Пробой подтверждённого swing-уровня"), (sweep, "Снятие локального экстремума с возвратом"),
-                             (gap, "Возврат к трёхсвечному ценовому разрыву")]:
-        if condition:
-            evidence.append(label)
-    qualified = structure and (broken or sweep) and gap and not stretched
-    return {"status": "candidate" if qualified else "skipped", "direction": direction,
-            "score": len(evidence), "evidence": evidence, "atr": atr,
-            "reason": "Есть согласование условий; метод ещё не проверен на реальной выборке." if qualified else "Недостаточно согласованных условий для входа."}
+        lo, hi = (a["high"], c["low"]) if up else (c["high"], a["low"])
+        if hi <= lo or abs(b["close"] - b["open"]) < .5 * atr:
+            continue
+        after = rows[i+1:]
+        intact = all(x["close"] >= lo if up else x["close"] <= hi for x in after)
+        reaction = any(x["low"] <= hi and x["high"] >= lo and (x["close"] > hi if up else x["close"] < lo) for x in after[-3:])
+        if intact and reaction:
+            gap = True
+            zones.append({"kind": "fvg", "low": lo, "high": hi, "time": b["time"]})
+    if gap:
+        evidence.append("Возврат в трёхсвечный FVG с закрытием в сторону структуры; зона не пробита закрытием.")
+    # Parallel rising/falling support and resistance from confirmed pivots.
+    channel = None
+    if len(highs) >= 3 and len(lows) >= 3:
+        def line(points):
+            pts = points[-3:]
+            mx, my = sum(x for x, _ in pts) / 3, sum(y for _, y in pts) / 3
+            slope = sum((x-mx)*(y-my) for x, y in pts) / sum((x-mx)**2 for x, _ in pts)
+            return slope, my + slope * (len(rows)-1-mx)
+        hs, ceiling = line(highs)
+        ls, floor = line(lows)
+        if (hs > 0 and ls > 0 if up else hs < 0 and ls < 0) and abs(hs-ls)*20 < atr and ceiling-floor > atr:
+            channel = {"low": floor, "high": ceiling, "slope_low": ls / period, "slope_high": hs / period, "time": rows[-1]["time"]}
+    channel_reaction = channel is not None and (rows[-1]["low"] <= channel["low"] + .5*atr and close > channel["low"] if up else rows[-1]["high"] >= channel["high"] - .5*atr and close < channel["high"])
+    if channel_reaction:
+        evidence.append("Реакция у нижней границы растущего канала." if up else "Реакция у верхней границы падающего канала.")
+    stretched = abs(close-fast) > 3*atr
+    against_boundary = channel is not None and (close >= channel["high"]-.25*atr if up else close <= channel["low"]+.25*atr)
+    qualified = (ob or gap and sweep or channel_reaction and sweep) and not stretched and not against_boundary
+    invalidation = zones[-1]["low" if up else "high"] if zones else lows[-1][1] if up else highs[-1][1]
+    return {"status": "candidate" if qualified else "skipped", "context_ready": True, "history_ready": True, "direction": direction,
+            "score": len(evidence), "evidence": evidence, "atr": atr, "close": close, "bar_time": rows[-1]["time"],
+            "zones": zones, "events": events[-5:], "channel": channel, "invalidation": invalidation,
+            "reason": "Структура и реакция на зону согласованы." if qualified else "Структура видна, но нет свежей реакции на зону; ждём подтверждение."}
 
 
-def rank(assets, histories, *, expiry, market, symbol, allow_otc, now):
-    """Availability must be observed, not guessed from a weekday calendar."""
+def rank(assets, histories, *, expiry, market, symbol, allow_otc, now, min_payout=.85):
     results, rejected = [], []
-    periods = (300, 900) if expiry >= 15 else (60, 300)
+    periods = PERIODS.get(expiry, (300, 900) if expiry >= 15 else (60, 300))
+    def normalize(s):
+        value=s.replace("/", "").upper().replace(" OTC", "_OTC")
+        return value+"_OTC" if market=="otc" and not value.endswith("_OTC") else value
     for asset in assets:
-        if symbol and asset["symbol"].replace("/", "").upper() != symbol.replace("/", "").replace(" OTC", "_OTC").upper():
+        if symbol and normalize(asset["symbol"]) != normalize(symbol) or asset["market"] != market:
             continue
-        if asset["market"] != market:
-            continue
-        if expiry not in asset.get("expiries",[]):
-            rejected.append("Эта экспирация не подтверждена каталогом брокера.")
+        if expiry not in asset.get("expiries", []):
+            rejected.append("Экспирация не подтверждена каталогом брокера.")
             continue
         if asset["market"] == "otc" and not allow_otc:
-            rejected.append("OTC отключён в настройках.")
+            rejected.append("Разреши OTC в настройках анализа или выбери вкладку OTC.")
             continue
-        if not asset["is_open"] or now - asset["updated_at"] > 60 or now - asset["quote_time"] > 10:
+        if asset["payout"] < min_payout:
+            rejected.append(f"Выплата ниже выбранного минимума {round(min_payout*100)}%.")
+            continue
+        if not asset["is_open"] or asset.get("quote_time") is None or now - asset["updated_at"] > 60 or now - asset["quote_time"] > 10:
             rejected.append("Нет свежей цены или подтверждения доступности пары.")
             continue
-        analyses = [analyze(histories.get((asset["symbol"], p), []), p, now) for p in periods]
-        if all(a["status"] == "candidate" for a in analyses) and analyses[0]["direction"] == analyses[1]["direction"]:
-            results.append({"symbol": asset["symbol"], "market": asset["market"], "direction": analyses[0]["direction"],
-                            "score": sum(a["score"] for a in analyses), "evidence": analyses[0]["evidence"],
-                            "timeframes": list(periods), "payout": asset["payout"], "price": asset["price"]})
+        analyses = [analyze(history(histories, asset["symbol"], p, now), p, now) for p in periods]
+        first, context = analyses
+        if first["status"] == "candidate" and context.get("context_ready") and first["direction"] == context["direction"]:
+            up = first["direction"] == "up"
+            price = asset["price"]
+            if abs(price-first["close"]) > .5*first["atr"] or (price <= first["invalidation"] if up else price >= first["invalidation"]):
+                rejected.append("Цена уже ушла от зоны или нарушила условие сценария. Вход пропущен.")
+                continue
+            results.append({"symbol": asset["symbol"], "market": asset["market"], "direction": first["direction"],
+                            "score": first["score"]+context["score"], "evidence": [*first["evidence"], f"Старший M{periods[1]//60} подтверждает направление структуры."],
+                            "timeframes": list(periods), "payout": asset["payout"], "price": price,
+                            "quote_time": asset["quote_time"], "zones": first["zones"], "events": first["events"],
+                            "channel": first["channel"], "invalidation": first["invalidation"], "atr": first["atr"],
+                            "entry_low": price-.35*first["atr"], "entry_high": price+.35*first["atr"],
+                            "bar_time": first["bar_time"], "candles": history(histories, asset["symbol"], periods[0], now)[-60:]})
         else:
-            rejected.append(next((a["reason"] for a in analyses if a["status"] != "candidate"), "Таймфреймы расходятся."))
-    return sorted(results, key=lambda x: (-x["score"], -x["payout"], x["symbol"])), rejected
+            rejected.append(next((a["reason"] for a in analyses if not a.get("context_ready")), first["reason"] if first["status"] != "candidate" else "Таймфреймы расходятся: вход пропущен."))
+    return sorted(results, key=lambda x: (x["payout"] < .92, -x["score"], -x["payout"], x["symbol"])), rejected
+
+
+def coverage(assets, histories, *, market, expiry, min_payout, now):
+    periods = PERIODS.get(expiry, (60, 300))
+    rows = []
+    for asset in assets:
+        if asset["market"] != market:
+            continue
+        bars = [history(histories, asset["symbol"], p, now) for p in periods]
+        checks = [analyze(r, p, now) for r, p in zip(bars, periods)]
+        quote_live = asset.get("quote_time") is not None and now - asset["quote_time"] <= 10
+        eligible = bool(asset["is_open"] and now-asset["updated_at"] <= 60 and asset["payout"] >= min_payout and expiry in asset["expiries"])
+        rows.append({"symbol": asset["symbol"], "payout": asset["payout"], "eligible": eligible,
+                     "quote_live": quote_live, "price": asset.get("price"), "quote_time": asset.get("quote_time"), "bars": [len(r) for r in bars],
+                     "history_ready": all(a.get("history_ready") for a in checks),
+                     "reason": next((a["reason"] for a in checks if not a.get("context_ready")), "Данные для анализа получены.")})
+    return {"catalog": len(rows), "eligible": sum(r["eligible"] for r in rows), "quoted": sum(r["quote_live"] for r in rows),
+            "ready": sum(r["eligible"] and r["quote_live"] and r["history_ready"] for r in rows),
+            "timeframes": list(periods), "pairs": sorted(rows, key=lambda r: (-r["eligible"], -r["quote_live"], -r["payout"], r["symbol"]))[:100]}

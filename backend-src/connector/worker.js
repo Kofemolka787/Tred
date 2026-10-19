@@ -1,6 +1,6 @@
 "use strict";
 importScripts("time-check.js","account-check.js");
-const WORKER_VERSION="0.3.8";
+const WORKER_VERSION="0.3.9";
 const endpoint=value=>{
   const u=new URL(value);
   if(u.protocol!=="https:"||!/^[a-z0-9-]+\.trycloudflare\.com$/.test(u.hostname)||u.port||u.username||u.password||u.search||u.hash||u.pathname!=="/")throw new Error("Укажи HTTPS-адрес своего TRED-туннеля.");
@@ -19,6 +19,14 @@ async function post(base,path,body,token){
 chrome.storage.local.setAccessLevel({accessLevel:"TRUSTED_CONTEXTS"});
 const eventFields={account:["type","mode","account_id","currency","balance","time","source_stream","id_status","id_shape","source_account","account_source"],asset:["type","symbol","market","is_open","payout","expiries","time"],quote:["type","symbol","price","time","source_clock"],candle:["type","symbol","period","time","open","high","low","close","source_clock"],trade:["type","mode","account_id","id","symbol","direction","stake","opened_at","expires_at","closed_at","pnl","status","time"]};
 let queue=[],sending=false,timer,generation=0;
+// Large candle histories must not delay or evict live balance/price changes.
+const priority=event=>({account:0,trade:1,asset:2,quote:3,candle:4}[event?.type]??5);
+function boundQueue(){
+  if(queue.length<=5000)return;
+  const urgent=queue.filter(e=>e?.type!=="candle").sort((a,b)=>priority(a)-priority(b)).slice(0,5000);
+  const room=5000-urgent.length;
+  queue=urgent.concat(room?queue.filter(e=>e?.type==="candle").slice(-room):[]);
+}
 // Pending balance is usable for <=60 seconds, in RAM, at its ORIGINAL time.
 // It may be delivered once after an explicit identity confirmation, never aged
 // forward or stored on disk. Confirmed profiles survive reconnects; modes stay separate.
@@ -42,6 +50,7 @@ async function flush(){
     const stored=await chrome.storage.local.get(["base","token","needsPairing","timeWarnings","receivedKinds","marketClock","clockSamples","accountCandidate","confirmedUsdAccounts","identityCandidate","manualIdentities","accountProfiles","lastBalance"]);
     const {base,token}=stored;
     if(!base||!token||stored.needsPairing){queue=[];return;}
+    queue.sort((a,b)=>priority(a)-priority(b));
     const batch=queue.splice(0,250),groups=new Map();
     for(const event of batch){
       const kind=TredTime.known(event?.type);
@@ -202,7 +211,7 @@ chrome.runtime.onMessage.addListener((message,sender,reply)=>{
       const accountId=profile?.account_id||(context&&TredAccount.id(context.account_id)?context.account_id:null)||(candidate?.mode===snapshot.mode&&TredAccount.id(candidate.account_id)?candidate.account_id:null);
       if(!accountId)return {ok:false};
       if(context&&(TredAccount.id(context.account_id)&&context.account_id!==accountId||context.source_account&&profile?.source_account&&context.source_account!==profile.source_account))return {ok:false};
-      queue.push({type:"account",...snapshot,account_id:accountId,account_source:"terminal-dom"});queue=queue.slice(-1000);
+      queue.push({type:"account",...snapshot,account_id:accountId,account_source:"terminal-dom"});boundQueue();
       await chrome.storage.local.set({relayLastSeen:Date.now(),terminalCode:"ready"});
       schedule();return {ok:true};
     }
@@ -227,7 +236,7 @@ chrome.runtime.onMessage.addListener((message,sender,reply)=>{
         while(streamTabs.size>20)streamTabs.delete(streamTabs.keys().next().value);
         return true;
       });
-      queue.push(...events);queue=queue.slice(-1000);schedule();return {ok:true};
+      queue.push(...events);boundQueue();schedule();return {ok:true};
     }
     throw new Error("Действие недоступно.");
   })().then(reply).catch(error=>reply({error:error.message}));

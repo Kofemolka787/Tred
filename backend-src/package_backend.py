@@ -5,14 +5,14 @@ from pathlib import Path
 import zipfile
 
 ROOT=Path(__file__).resolve().parent
-FILES=("backend.py","telegram_auth.py","trading_core.py","market_analysis.py","free_start.py",
+FILES=("backend.py","telegram_auth.py","trading_core.py","market_analysis.py","signal_sessions.py","free_start.py",
        "requirements-web.txt","START-WINDOWS.cmd","START-LINUX.sh","CONNECT-RU.md",
-       "test_backend.py","test_support.py","test_trading_core.py","test_market_analysis.py","check_connector.js",
+       "test_backend.py","test_support.py","test_trading_core.py","test_market_analysis.py","test_signal_sessions.py","check_signal_ui.py","check_connector.js",
        "package_backend.py","test_windows_package.py","windows_setup.py","test_windows_setup.py",
        "tunnel_check.py","test_tunnel_check.py","test_free_start.py","check_connector_worker.js","check_connector_http.py","check_pairing_ui.py","check_connector_popup.py","check_data_client.js","check_terminal_ui.py","check_device_sync.py")
 CONNECTOR=("manifest.json","observer.js","balance-read.js","relay.js","worker.js","time-check.js","account-check.js","popup.html","popup.css","popup.js")
-WEB=("index.html","styles.css","app.js","data-client.js","app-config.json")
-VERSION="0.3.13"
+WEB=("index.html","styles.css","app.js","signals.js","data-client.js","app-config.json")
+VERSION="0.3.14"
 
 
 def windows_batch(data):

@@ -8,6 +8,7 @@ let busy = false;
 let dataClient;
 let toastTimer;
 let refreshFailed = false;
+let stateGeneration = 0;
 const usd = value => value === null || value === undefined ? "—" : "$" + Number(value).toLocaleString("en-US", {minimumFractionDigits:2,maximumFractionDigits:2});
 const shortUsd = value => "$" + Number(value).toLocaleString("en-US", {maximumFractionDigits:2});
 const text = (selector, value) => { const element = $(selector); if (element) element.textContent = value; };
@@ -29,7 +30,8 @@ function soon(message) {
   if (!$("#soon-dialog").open) $("#soon-dialog").showModal();
   haptic();
 }
-async function api(path, body) { return dataClient.request(path, body); }
+async function api(path, body) { if(body!==undefined)stateGeneration++;return dataClient.request(path, body); }
+window.TredSignals.init({api,getState:()=>current,setState:state=>{current=state;},render,notify,update,setBusy,getBusy:()=>busy});
 
 function render() {
   if (!current) return;
@@ -49,7 +51,7 @@ function render() {
   });
   text("#feed-badge span", prefs.market === "otc" ? "OTC-пары" : "Валютные пары");
   $("#feed-badge").classList.toggle("normal", prefs.market === "normal");
-  text("#mode-caption", `${market} · ${mode === "long" ? "15, 30 и 60 минут" : "экспирация от 3 минут"}`);
+  text("#mode-caption", `${market} · ${mode === "long" ? "сделка на 15 минут" : "сделки на 5 и 10 минут"}`);
   const automatic = prefs.selection === "auto";
   $("#auto-card").classList.toggle("selected", automatic);
   $("#auto-card").setAttribute("aria-pressed", String(automatic));
@@ -59,7 +61,7 @@ function render() {
   text("#connection-reason", connection.reason);
   const expirySwitch = $("#expiry-switch");
   expirySwitch.replaceChildren();
-  (mode === "long" ? [15, 30, 60] : [3, 5, 10]).forEach(minutes => {
+  (mode === "long" ? [15] : [5, 10]).forEach(minutes => {
     const button = document.createElement("button");
     button.type = "button";
     button.textContent = `${minutes} мин`;
@@ -80,6 +82,7 @@ function render() {
   renderAccount();
   renderGoal();
   renderTrades();
+  window.TredSignals.render(current);
   const requests = current.mode === "device" ? [] : current.recent_requests;
   $("#requests-section").hidden = !requests.length;
   const list = $("#request-list");
@@ -148,7 +151,7 @@ function fillTrades(selector,trades,paper=false) {
 }
 function renderTrades() {
   const trades=current.trades || [], paper=current.paper_trades || [];
-  $("#trades-empty").hidden=trades.length>0;
+  $("#trades-empty").hidden=trades.length>0||(current.signal_sessions||[]).some(s=>s.result);
   text("#trade-summary",trades.length ? "Полученные сделки Pocket Option. Симуляция показана отдельно." : "Подключи счёт, чтобы видеть реальные сделки.");
   fillTrades("#trade-list",trades); fillTrades("#paper-trade-list",paper,true);
   $("#paper-trade-section").hidden=!paper.length;
@@ -170,7 +173,7 @@ $$("[data-tab]").forEach(button => button.addEventListener("click", () => {
   $("#workspace").scrollTop = 0;
   haptic();
 }));
-$$("[data-market]").forEach(button => button.addEventListener("click", () => update({ market: button.dataset.market })));
+$$("[data-market]").forEach(button => button.addEventListener("click", () => update({ market: button.dataset.market, ...(button.dataset.market==="otc"?{allow_otc:true}:{}) })));
 $$("[data-mode]").forEach(button => button.addEventListener("click", () => update({ expiry: button.dataset.mode === "long" ? 15 : 5 })));
 $$("[data-soon]").forEach(button => button.addEventListener("click", () => soon(`${button.dataset.soon} появится в следующих обновлениях TRED.`)));
 $("#auto-card").addEventListener("click", () => update({ selection: "auto" }));
@@ -180,7 +183,7 @@ $("#choose-pair").addEventListener("click", () => {
   $("#pair-dialog").showModal();
   $("#pair-input").focus();
 });
-$$("[data-symbol]").forEach(button => button.addEventListener("click", () => { $("#pair-input").value = button.dataset.symbol; }));
+$(".pair-suggestions").addEventListener("click",event=>{const button=event.target.closest("[data-symbol]");if(button)$("#pair-input").value=button.dataset.symbol;});
 $("#pair-form").addEventListener("submit", async event => {
   event.preventDefault();
   const value = $("#pair-input").value.trim();
@@ -197,16 +200,14 @@ $("#open-pocket").addEventListener("click", () => {
 $("#request-signal").addEventListener("click", async () => {
   if (!authorized || busy) return;
   if (current.mode === "device") { $("#connect-dialog").showModal(); return; }
+  if(current.signal_version!==1){notify("Обнови сервер до 0.3.14 — инструкция в кабинете.");return;}
   setBusy(true);
   try {
     const result = await api("/api/signal", {});
     current = result.state;
     render();
-    text("#analysis-title",result.status === "candidate" ? `${result.symbol} · ${result.direction === "up" ? "ВВЕРХ" : "ВНИЗ"}` : "Подходящего входа пока нет");
-    text("#analysis-result",result.reason);
-    $("#analysis-evidence").replaceChildren();
-    (result.evidence || []).forEach(line => { const li=document.createElement("li"); li.textContent=line; $("#analysis-evidence").append(li); });
-    $("#analysis-dialog").showModal();
+    window.TredSignals.show(result);
+    $("#signal-result").scrollIntoView({block:"start",behavior:"smooth"});
   } catch (error) { notify(error.message || "Не удалось выполнить запрос."); }
   finally { setBusy(false); }
 });
@@ -239,23 +240,23 @@ let refreshing=false;
 async function refreshAccount(forceCloud=false){
   if(!authorized||busy||document.hidden||refreshing)return;
   refreshing=true;
-  const client=dataClient,sequence=connectGeneration;
+  const client=dataClient,sequence=connectGeneration,stateEpoch=stateGeneration;
   try {
     const restored=await client.checkCloud?.(forceCloud);
-    if(client!==dataClient||sequence!==connectGeneration)return;
+    if(client!==dataClient||sequence!==connectGeneration||stateEpoch!==stateGeneration)return;
     if(restored){
       await restored.commit?.();
-      if(client!==dataClient||sequence!==connectGeneration)return;
+      if(client!==dataClient||sequence!==connectGeneration||stateEpoch!==stateGeneration)return;
       clearPair();dataClient=restored.client;current=restored.state;
     }else if(current?.mode!=="device"){
       const state=await client.request("/api/state");
-      if(client!==dataClient||sequence!==connectGeneration)return;
+      if(client!==dataClient||sequence!==connectGeneration||stateEpoch!==stateGeneration)return;
       current=state;
     }
     refreshFailed=false;$("#notice").hidden=true;render();
   }
   catch (error) {
-    if(client!==dataClient||sequence!==connectGeneration)return;
+    if(client!==dataClient||sequence!==connectGeneration||stateEpoch!==stateGeneration)return;
     current.stale=true; current.connection.live=false; render();
     $("#notice").hidden=false; text("#notice","Нет связи с сервером. Показаны последние полученные данные. Управление симуляцией недоступно.");
     if (!refreshFailed) notify(error.message || "Не удалось обновить статус.");
@@ -291,7 +292,7 @@ $("#paper-start").addEventListener("click", () => paper(true));
 $("#paper-stop").addEventListener("click", () => paper(false));
 $("#show-method").addEventListener("click", () => {
   text("#analysis-title","Как анализирует TRED");
-  text("#analysis-result","Структура swing-уровней, пробой, снятие локального экстремума и возврат к ценовому разрыву. Условия должны согласоваться на двух таймфреймах. Это правила анализа; обученной нейросети и измеренной проходимости пока нет.");
+  text("#analysis-result","Подтверждённые swing-экстремумы HH/HL или LH/LL, пробой BOS с импульсом, реакция на предполагаемый order block, FVG и вынос экстремума, границы направленного канала. Вход требует реакции на зону и согласования со старшим таймфреймом. Приоритет выплат от 92%, минимум выбран тобой. Это проверяемые правила анализа: обученной нейросети и измеренной проходимости пока нет. На OTC заявки и фактическая ликвидность участников не видны.");
   $("#analysis-evidence").replaceChildren(); $("#analysis-dialog").showModal();
 });
 $("#connect-backend").addEventListener("click",async () => {

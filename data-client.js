@@ -1,7 +1,7 @@
 "use strict";
 // Local preferences contain no account data, passwords or session credentials.
 window.TredData = (() => {
-  const expirations = [3,5,10,15,30,60];
+  const expirations = [5,10,15];
   const defaults = {daily_loss:"10.00",daily_target:"20.00",balance_floor:"90.00",stake:"1.00",max_open:1,max_overlays:0,goal_start:"100.00",goal_target:"1000.00"};
   const reason = "Подключи сервер и модуль браузера для анализа котировок.";
   const metadataUser = tg => ({id:Number.isSafeInteger(tg?.initDataUnsafe?.user?.id) && tg.initDataUnsafe.user.id > 0 ? tg.initDataUnsafe.user.id : "—",first_name:typeof tg?.initDataUnsafe?.user?.first_name === "string" ? tg.initDataUnsafe.user.first_name.slice(0,80) : "Гость"});
@@ -80,7 +80,7 @@ window.TredData = (() => {
     const p = value && typeof value === "object" ? value : {};
     const sym = typeof p.symbol === "string" ? p.symbol.trim().toUpperCase().replace(/\s+/g," ") : null;
     const manual = p.selection === "manual" && /^[A-Z0-9][A-Z0-9 /_.#-]{1,31}$/.test(sym || "");
-    return {market:["normal","otc"].includes(p.market) ? p.market : "normal",expiry:expirations.includes(p.expiry) ? p.expiry : 5,selection:manual ? "manual" : "auto",symbol:manual ? sym : null,state:"idle",allow_otc:p.allow_otc === true};
+    return {market:["normal","otc"].includes(p.market) ? p.market : "normal",expiry:expirations.includes(p.expiry) ? p.expiry : 5,selection:manual ? "manual" : "auto",symbol:manual ? sym : null,state:"idle",allow_otc:p.allow_otc === true,min_payout:Number.isInteger(p.min_payout)&&p.min_payout>=85&&p.min_payout<=92?p.min_payout:85};
   }
   function validRisk(value) {
     const result = {...defaults};
@@ -102,14 +102,14 @@ window.TredData = (() => {
     persist();
     const state = () => ({mode:"device",persistent,user,preferences:{...preferences},accounts:[],trades:[],paper_trades:[],
       connection:{authenticated:false,live:false,model_ready:false,reason},
-      statistics:{signals:0,wins:0,losses:0,draws:0,win_rate:null},recent_requests:[],catalog:{verified_count:0},minimum_expiry:3,
+      statistics:{signals:0,wins:0,losses:0,draws:0,win_rate:null},recent_requests:[],catalog:{verified_count:0},minimum_expiry:5,
       goal:{start:riskConfig.goal_start,target:riskConfig.goal_target,progress:0,available:false,earned:"0.00",current:null},
       risk:{config:{...riskConfig},running:false,locked:false,reason:null,balance:"100.00",daily_pnl:"0.00",reserved:"0.00",execution:"simulation",real_orders_supported:false}});
     const client={mode:"device",async request(path,changes={}) {
       if (path === "/api/state") return state();
       if (path === "/api/settings") {
         const next = {...preferences,...changes};
-        if (!changes || typeof changes !== "object" || !Object.keys(changes).every(k => ["market","expiry","symbol","selection","allow_otc"].includes(k)) || !["normal","otc"].includes(next.market) || !expirations.includes(next.expiry) || !["auto","manual"].includes(next.selection) || typeof next.allow_otc !== "boolean") throw new Error("Проверь выбранные настройки.");
+        if (!changes || typeof changes !== "object" || !Object.keys(changes).every(k => ["market","expiry","symbol","selection","allow_otc","min_payout"].includes(k)) || !["normal","otc"].includes(next.market) || !expirations.includes(next.expiry) || !["auto","manual"].includes(next.selection) || typeof next.allow_otc !== "boolean" || !Number.isInteger(next.min_payout) || next.min_payout<85 || next.min_payout>92) throw new Error("Проверь выбранные настройки.");
         if (next.selection === "manual" && (typeof next.symbol !== "string" || !/^[A-Z0-9][A-Z0-9 /_.#-]{1,31}$/.test(next.symbol.trim().toUpperCase()))) throw new Error("Проверь название пары.");
         preferences = validPreferences(next); persist(); return state();
       }

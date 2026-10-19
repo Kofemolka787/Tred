@@ -1,11 +1,15 @@
 # TRED Mini App
 
-TRED v0.3.13 for @Tr1edBot_bot. Open https://kofemolka787.github.io/Tred/ from Telegram.
+TRED v0.3.14 for @Tr1edBot_bot. Open https://kofemolka787.github.io/Tred/ from Telegram.
 
-Mobile/desktop UI, Goal $100 → $1000, risk settings and a downloadable local backend. Offline UI works without a server. Personal account data requires verified Telegram identity plus an individually paired browser connector and a running HTTPS backend.
+[Setup and update in Russian](backend-src/CONNECT-RU.md) · [Backend source](backend-src/) · [Download 0.3.14](https://kofemolka787.github.io/Tred/tred-backend-v0.3.14.zip)
 
-[Free local setup in Russian](backend-src/CONNECT-RU.md) · [Backend source](backend-src/) · [Download](https://kofemolka787.github.io/Tred/tred-backend-v0.3.13.zip)
+Read-only demo/real Pocket balances, Telegram-scoped connection discovery, explainable 5/10/15-minute price-action scenarios, payout filtering (prefer 92%, floor 85%), and user-confirmed live trade observations. The actual owner's real/demo balance delivery and cross-device cabinet have been confirmed. This new analysis release needs validation against their incoming candle formats.
 
-The backend has per-user account snapshots, an idempotent manual-trade journal, daily simulation stops, exposure reservations and causal multi-timeframe price-action research. Real order execution, martingale and withdrawals are not implemented. Strategy accuracy is unmeasured; no trained neural network is provided.
+The analyzer uses causal confirmed pivots, directional structure, BOS/displacement, proposed order-block and FVG reactions, sweep patterns and channel boundaries, with multi-timeframe agreement. It is explicit rule-based analysis: no trained neural network or external LLM, and no measured strategy win probability. OTC candle patterns do not establish exchange order flow or actual liquidity. Longer expiry is not an accuracy guarantee. A missing history, stale feed or absent setup returns a reason instead of a direction.
 
-Read-only pair catalog, quote delivery and demo account balance have been confirmed on the owner's computer. Telegram-scoped connection discovery across devices, saved account profiles, visible-terminal balance observation, automatic collector restoration and delivery checks every 5 seconds are included; this new release still needs owner-device verification after installation. Real-account trade journal and complete live analysis still require separate validation. The connector only analyzes data actually observed in its open browser; it does not scan all pairs automatically. Unknown broker formats are ignored rather than guessed. No bot tokens, passwords, account sessions, personal databases are published. See the setup guide for exact limitations.
+The connector observes incoming data from the open terminal; it does not subscribe to all instruments or control the broker's charts. Coverage separates catalog, payout/expiry eligibility, fresh quotes and sufficient closed bars. Read-only delivery is separate from brokerage order execution, which is not implemented.
+
+After marking an independently opened trade, the same signed user can follow received quotes on another device and report win/loss/draw after the timer. Observed entry prices, manual results, broker-reported trades and simulation are explicitly labelled. User reports never change broker balances or broker-verified statistics/goal profit. Signed API checks, persistent isolation, no duplicate starts/results, and freshness/entry-window guards apply.
+
+Functional fixtures cover a real analysis engine, actual signed temporary backend, and two independent browser clients; these are not a strategy profitability backtest or native broker certification. No bot tokens, passwords, sessions, private databases or owner-specific IDs are published. See the Russian guide for setup, remaining data limits and exact checks.

@@ -43,9 +43,9 @@ class BackendTests(unittest.TestCase):
     def test_tampered_identity_and_cross_origin_mutation_are_rejected(self):
         signed=signed_data(self.key,user_id=101)
         self.assertEqual(self.request("/api/state",headers={"X-Telegram-Init-Data":signed.replace("101","202")})[0],401)
-        self.assertEqual(self.request("/api/settings",{"expiry":30},headers={"Origin":"https://evil.example"})[0],403)
+        self.assertEqual(self.request("/api/settings",{"expiry":15},headers={"Origin":"https://evil.example"})[0],403)
         self.assertEqual(self.request("/api/settings",{"user_id":202})[0],400)
-        status,_,headers=self.request("/api/settings",{"expiry":30},headers={"Origin":"https://kofemolka787.github.io"})
+        status,_,headers=self.request("/api/settings",{"expiry":15},headers={"Origin":"https://kofemolka787.github.io"})
         self.assertEqual(status,200)
         self.assertEqual(headers.get("Access-Control-Allow-Origin"),"https://kofemolka787.github.io")
         self.assertEqual(self.request("/api/state",uid=202)[1]["preferences"]["expiry"],5)

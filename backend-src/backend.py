@@ -17,7 +17,7 @@ from trading_core import DomainError, Ledger
 ROOT = Path(__file__).resolve().parent
 FRONTEND_ORIGIN = "https://kofemolka787.github.io"
 STATIC = {"/":("index.html","text/html; charset=utf-8"), "/app.js":("app.js","application/javascript"),
-          "/data-client.js":("data-client.js","application/javascript"), "/styles.css":("styles.css","text/css"),
+          "/data-client.js":("data-client.js","application/javascript"), "/signals.js":("signals.js","application/javascript"), "/styles.css":("styles.css","text/css"),
           "/app-config.json":("app-config.json","application/json")}
 LOG = logging.getLogger("tred.backend")
 
@@ -132,6 +132,10 @@ def handler(ledger, *, public_key=PUBLIC_KEY):
                 return self.reply(200,ledger.pair(uid))
             elif path == "/api/unlink":
                 ledger.unlink(uid)
+            elif path == "/api/watch":
+                ledger.watch(uid,value)
+            elif path == "/api/result":
+                ledger.record_result(uid,value)
             elif path == "/api/signal":
                 result = ledger.signal(uid)
                 return self.reply(200,{**result,"state":ledger.state(user)})

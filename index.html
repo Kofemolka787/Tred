@@ -7,10 +7,11 @@
   <meta name="description" content="TRED — твоё пространство в Telegram. Выбирай свой формат.">
   <title>TRED · Mini App</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="./styles.css?v=0.3.13">
+  <link rel="stylesheet" href="./styles.css?v=0.3.14">
   <script src="https://telegram.org/js/telegram-web-app.js" defer></script>
-  <script src="./data-client.js?v=0.3.13" defer></script>
-  <script src="./app.js?v=0.3.13" defer></script>
+  <script src="./data-client.js?v=0.3.14" defer></script>
+  <script src="./signals.js?v=0.3.14" defer></script>
+  <script src="./app.js?v=0.3.14" defer></script>
 </head>
 <body>
   <svg class="sprite" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
@@ -41,27 +42,32 @@
         </div>
         <div class="mode-switch" aria-label="Формат">
           <button class="muted-mode" id="show-method"><svg><use href="#i-target"/></svg><span>SMC</span></button>
-          <button class="settings-control active" data-mode="standard"><span class="purple-orb"></span><span>Обычный</span></button>
-          <button class="settings-control" data-mode="long"><svg class="chart-icon"><use href="#i-trend"/></svg><span>Долгосрок</span></button>
-          <button class="muted-mode" data-soon="Короткий формат"><svg class="bolt-icon"><use href="#i-bolt"/></svg><span>Короткий</span></button>
+          <button class="settings-control active" data-mode="standard"><span class="purple-orb"></span><span>5–10 мин</span></button>
+          <button class="settings-control" data-mode="long"><svg class="chart-icon"><use href="#i-trend"/></svg><span>15 мин</span></button>
+          
         </div>
-        <p class="mode-caption" id="mode-caption">OTC · экспирация от 3 минут</p>
+        <p class="mode-caption" id="mode-caption">OTC · сделки на 5, 10 и 15 минут</p>
         <button class="auto-card selected settings-control" id="auto-card" aria-pressed="true">
           <span class="target-orbit" aria-hidden="true"><span class="orbit-arc"></span><span class="target-center">🎯</span></span>
-          <span class="auto-copy"><strong>Лучшая пара<br>для тебя</strong><span class="auto-subtitle">Автоматический выбор</span><span class="data-chip" id="data-chip"><i></i>Автоподбор</span></span>
+          <span class="auto-copy"><strong>Поиск<br>по структуре</strong><span class="auto-subtitle">Автоматический выбор</span><span class="data-chip" id="data-chip"><i></i>Автоподбор</span></span>
           <span class="selection-check"><svg><use href="#i-check"/></svg></span>
         </button>
         <button class="manual-link settings-control" id="choose-pair"><span id="pair-label">или выбрать пару самому</span><svg><use href="#i-chevron"/></svg></button>
         <p id="connection-reason" class="visually-hidden">Торговая логика появится позже.</p>
+        <label class="payout-filter">Минимальная выплата брокера<select class="settings-control" id="min-payout"><option value="85">85% · приоритет от 92%</option><option value="90">90% · приоритет от 92%</option><option value="92">Только от 92%</option></select></label>
+        <details class="feed-details"><summary id="feed-coverage">Проверяем данные для анализа…</summary><p>Анализируем полученные данные открытого терминала. Открой нужные графики в Pocket Option на M1, M5 и, для 15 минут, M15. Для каждого используемого таймфрейма нужно 80 закрытых свечей. Пропуски не заполняются.</p><div id="coverage-list"></div></details>
+        <p id="signals-upgrade" class="notice" hidden>Для сценариев и сопровождения нужен новый сервер. <a href="./tred-backend-v0.3.14.zip">Скачать 0.3.14</a></p>
         <div class="signal-spacer"></div>
         <div class="signal-controls">
           <div class="expiry-switch" id="expiry-switch" aria-label="Экспирация"></div>
           <button class="signal-button settings-control" id="request-signal"><strong>ПОЛУЧИТЬ СИГНАЛ</strong><span id="signal-subtitle">Автоподбор · 5 мин</span><span class="button-shine" aria-hidden="true"></span></button>
           <p class="demo-caption" id="analysis-caption"><i></i>Анализ: ждём подключение данных</p>
         </div>
+        <section class="signal-result" id="signal-result" hidden aria-label="Сценарий анализа"></section>
+        <section id="live-sessions" aria-label="Отслеживаемые сделки"></section>
       </section>
       <section class="panel" data-panel="trades" hidden>
-        <div class="section-heading"><p class="eyebrow">МОИ СДЕЛКИ</p><span class="quiet-tag">История</span></div>
+        <div class="section-heading"><p class="eyebrow">МОИ СДЕЛКИ</p><span class="quiet-tag">Данные брокера</span></div>
         <div class="stat-tiles">
           <div class="stat-tile"><strong id="trade-count">0</strong><span>сделок</span></div>
           <div class="stat-tile"><strong><b class="positive" id="wins">0</b><em>/</em><b class="negative" id="losses">0</b></strong><span>плюс / минус</span></div>
@@ -69,6 +75,7 @@
         </div>
         <div class="empty-card" id="trades-empty"><div class="empty-icon"><svg><use href="#i-clock"/></svg></div><h2>Всё ещё впереди</h2><p>Здесь появятся твои сделки.<br>А пока — устраивайся поудобнее.</p></div>
         <div class="summary-line" id="trade-summary">Подключи счёт, чтобы видеть реальные сделки.</div><div id="trade-list"></div><div id="paper-trade-section" hidden><p class="eyebrow">ОТДЕЛЬНО · СИМУЛЯЦИЯ</p><div id="paper-trade-list"></div></div>
+        <section id="signal-history-section" hidden><p class="eyebrow">ПО СЦЕНАРИЯМ TRED · РЕЗУЛЬТАТ УКАЗАН ТОБОЙ</p><p class="quiet-text" id="signal-journal-stats"></p><div id="signal-trade-list"></div></section>
         <div class="requests-section" id="requests-section" hidden><p class="eyebrow">ЗАПРОСЫ</p><div id="request-list"></div></div>
       </section>
       <section class="panel goal-panel" data-panel="goal" hidden>
@@ -101,8 +108,8 @@
   <dialog class="sheet" id="guide-dialog"><div class="sheet-handle"></div><div class="sheet-heading"><h2>Это TRED ✦</h2><button class="icon-button" data-close="guide-dialog" aria-label="Закрыть"><svg><use href="#i-close"/></svg></button></div><p>Твоё пространство в Telegram — на телефоне и компьютере.</p><ol class="guide-list"><li><strong>Выбери свой формат</strong><span>Обычный рынок или OTC, пара и время — всё под рукой.</span></li><li><strong>Осмотрись внутри</strong><span>Сигналы, сделки, прогресс и кабинет в одном приложении.</span></li><li><strong>Дальше — больше</strong><span>Сейчас знакомимся с интерфейсом. Возможности будем добавлять постепенно.</span></li></ol></dialog>
   <dialog class="sheet soon-sheet" id="soon-dialog"><div class="soon-icon">✦</div><h2>Скоро в TRED</h2><p id="soon-copy">Сигналы появятся в следующих обновлениях.<br>Сейчас можно выбрать формат и познакомиться с приложением.</p><button class="primary-small" data-close="soon-dialog">Буду ждать</button></dialog>
   <dialog class="sheet" id="risk-dialog"><div class="sheet-handle"></div><div class="sheet-heading"><h2>Твои границы</h2><button class="icon-button" data-close="risk-dialog" aria-label="Закрыть"><svg><use href="#i-close"/></svg></button></div><p>Лимиты симуляции. Реальные сделки в Pocket Option ты контролируешь самостоятельно.</p><form id="risk-form"><label for="risk-loss">Дневной стоп, $ <output id="loss-output">10</output></label><input type="range" id="risk-loss" min="1" max="100" step="1" value="10"><div class="form-grid"><label>Цель на день, $<input id="risk-target" type="number" min="0.01" step="0.01" required></label><label>Минимальный баланс, $<input id="risk-floor" type="number" min="0.01" step="0.01" required></label><label>Ставка симуляции, $<input id="risk-stake" type="number" min="0.01" step="0.01" required></label><label>Открытых позиций<select id="risk-open"><option>1</option><option>2</option><option>3</option></select></label><label>Начало цели, $<input id="goal-start-input" type="number" min="0.01" step="0.01" required></label><label>Цель, $<input id="goal-target-input" type="number" min="0.01" step="0.01" required></label></div><div class="locked-option"><span>Перекрытия после убытка</span><strong>0 · выключены</strong></div><label class="check-option"><input id="allow-otc" type="checkbox">Разрешить анализ OTC</label><p class="quiet-text">OTC не включится само при закрытии обычного рынка. После первой позиции дня лимиты можно только ужесточить. После стопа — блокировка до следующего дня UTC.</p><button class="primary-small" type="submit">Сохранить границы</button></form></dialog>
-  <dialog class="sheet" id="connect-dialog"><div class="sheet-handle"></div><div class="sheet-heading"><h2>Связать Pocket</h2><button class="icon-button" data-close="connect-dialog" aria-label="Закрыть"><svg><use href="#i-close"/></svg></button></div><p>Бесплатный вариант: сервер работает на твоём компьютере. Пока пользуешься данными с телефона, компьютер и Pocket Option должны быть включены.</p><ol class="guide-list"><li><strong>Запусти TRED на компьютере</strong><span>Скачай ZIP, нажми на него правой кнопкой → «Извлечь всё». В распакованной папке TredBackend открой START-WINDOWS.cmd. Если попросит Python — сначала установи его. Остальное загрузится автоматически.</span></li><li><strong>Свяжи приложение</strong><span>Вставь HTTPS-адрес, который покажет запуск.</span></li><li><strong>Подключи модуль браузера</strong><span>Установи папку connector в Opera / Chrome, вставь адрес и одноразовый код. Затем обнови Pocket Option.</span></li></ol><a class="download-link" href="https://kofemolka787.github.io/Tred/tred-backend-v0.3.13.zip" download>Скачать сервер и модуль</a><form id="backend-form"><label for="backend-url">HTTPS-адрес твоего сервера</label><input id="backend-url" type="url" placeholder="https://…trycloudflare.com" autocomplete="off" required><button class="primary-small" type="submit">Проверить и подключить</button></form><div id="pairing-box" hidden><p>Одноразовый код · действует 5 минут</p><code id="pair-code"></code><small id="pair-server"></small><button class="subtle-button" id="copy-code" disabled>Скопировать код</button><button class="subtle-button" id="renew-code" type="button">Получить новый код</button><small>Передай его только своему модулю. Не отправляй в чат.</small></div><p id="connect-status" role="status"></p></dialog>
-  <dialog class="sheet" id="analysis-dialog"><div class="sheet-handle"></div><div class="sheet-heading"><h2 id="analysis-title">Результат анализа</h2><button class="icon-button" data-close="analysis-dialog" aria-label="Закрыть"><svg><use href="#i-close"/></svg></button></div><p id="analysis-result"></p><ul id="analysis-evidence"></ul><p class="quiet-text">Это исследовательская версия правил SMC и структуры рынка. Проходимость ещё не измерена. Реальные сделки автоматически не открываются.</p></dialog>
+  <dialog class="sheet" id="connect-dialog"><div class="sheet-handle"></div><div class="sheet-heading"><h2>Связать Pocket</h2><button class="icon-button" data-close="connect-dialog" aria-label="Закрыть"><svg><use href="#i-close"/></svg></button></div><p>Бесплатный вариант: сервер работает на твоём компьютере. Пока пользуешься данными с телефона, компьютер и Pocket Option должны быть включены.</p><ol class="guide-list"><li><strong>Запусти TRED на компьютере</strong><span>Скачай ZIP, нажми на него правой кнопкой → «Извлечь всё». В распакованной папке TredBackend открой START-WINDOWS.cmd. Если попросит Python — сначала установи его. Остальное загрузится автоматически.</span></li><li><strong>Свяжи приложение</strong><span>Вставь HTTPS-адрес, который покажет запуск.</span></li><li><strong>Подключи модуль браузера</strong><span>Установи папку connector в Opera / Chrome, вставь адрес и одноразовый код. Затем обнови Pocket Option.</span></li></ol><a class="download-link" href="https://kofemolka787.github.io/Tred/tred-backend-v0.3.14.zip" download>Скачать сервер и модуль</a><form id="backend-form"><label for="backend-url">HTTPS-адрес твоего сервера</label><input id="backend-url" type="url" placeholder="https://…trycloudflare.com" autocomplete="off" required><button class="primary-small" type="submit">Проверить и подключить</button></form><div id="pairing-box" hidden><p>Одноразовый код · действует 5 минут</p><code id="pair-code"></code><small id="pair-server"></small><button class="subtle-button" id="copy-code" disabled>Скопировать код</button><button class="subtle-button" id="renew-code" type="button">Получить новый код</button><small>Передай его только своему модулю. Не отправляй в чат.</small></div><p id="connect-status" role="status"></p></dialog>
+  <dialog class="sheet" id="analysis-dialog"><div class="sheet-handle"></div><div class="sheet-heading"><h2 id="analysis-title">Результат анализа</h2><button class="icon-button" data-close="analysis-dialog" aria-label="Закрыть"><svg><use href="#i-close"/></svg></button></div><p id="analysis-result"></p><ul id="analysis-evidence"></ul><p class="quiet-text">Автоматические правила SMC и структуры. Обученная нейросеть не подключена; проходимость не измерена. Выплата 92% — не вероятность выигрыша. Ордер открываешь самостоятельно у брокера.</p></dialog>
   <div class="toast" id="toast" role="status" hidden></div>
 </body>
 </html>

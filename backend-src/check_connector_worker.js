@@ -29,7 +29,7 @@ async function checks(){
   assert.equal(h.requests[2].body.events[0].time,now,"No timestamp rewriting");
   let status=await h.message({action:"status"});
   assert(status.paired&&!status.needsPairing&&status.lastSeen);
-  assert.equal(status.worker_version,"0.3.8");
+  assert.equal(status.worker_version,"0.3.9");
   assert.match(status.diagnostic,/quote|Котировка/);assert.match(status.diagnostic,/30 с/);
   assert(!JSON.stringify(status).includes(token));
   assert(!JSON.stringify(h.storage).includes('"balance"'));
@@ -286,7 +286,14 @@ async function checks(){
   assert((await displayed.message({action:"terminal-balance",snapshot:{...snapshot,mode:"real"}},sender)).ok===false);
   assert((await displayed.message({action:"terminal-balance",snapshot:{...snapshot,currency:"EUR"}},sender)).error);
   assert((await displayed.message({action:"terminal-balance",snapshot:{...snapshot,time:now-61}},sender)).error);
-  console.log(JSON.stringify({ok:true,worker_scenarios:51,utc_timestamps_unchanged:true,bad_quote_does_not_block_account:true,failed_claim_preserves_binding:true,status_excludes_token:true,unknown_credential_fields_not_sent:true,late_response_after_disconnect_ignored:true,html_and_missing_token_keep_binding:true,explicit_po_utc2_profile:true,stale_and_future_still_rejected:true,closed_candles_decoded_before_filter:true,source_time_provenance_retained:true,no_arrival_time_calibration:true,usd_requires_confirmation_when_missing:true,confirmation_scoped_to_account_and_mode:true,explicit_other_currency_cannot_be_overridden:true,currency_confirmation_does_not_replay_balance:true,manual_profile_scoped_to_mode_and_known_source:true,fresh_pending_balance_keeps_original_time:true,pending_balance_not_persisted:true,broker_identity_not_overridden:true,unknown_id_requires_explicit_scoped_confirmation:true,schema_diagnostics_exclude_raw_ids:true,zero_id_rejected:true,balance_changes_without_reconfirmation:true,profile_survives_reconnect_and_restart:true,legacy_confirmation_migrated:true,different_source_requires_confirmation:true,delivery_retry_without_freshening:true,synchronous_context_invalidation_handled:true,collector_restored_without_page_reload:true,visible_balance_uses_configured_account:true}));
+  const busyHistory=harness();
+  await busyHistory.message({action:"events",events:[account]},sender);
+  const historyRow={type:"candle",symbol:"EURUSD",period:60,time:Math.floor(now/60)*60-60,open:1.1,high:1.2,low:1,close:1.15};
+  for(let i=0;i<24;i++)await busyHistory.message({action:"events",events:Array.from({length:250},()=>({...historyRow}))},sender);
+  await vm.runInContext("flush()",busyHistory.context);
+  assert.equal(busyHistory.requests[0].body.events[0].type,"account","Bulk histories cannot delay or evict a live balance event");
+  assert(busyHistory.storage.receivedKinds.includes("account"));
+  console.log(JSON.stringify({ok:true,live_data_prioritized_over_large_histories:true,worker_scenarios:52,utc_timestamps_unchanged:true,bad_quote_does_not_block_account:true,failed_claim_preserves_binding:true,status_excludes_token:true,unknown_credential_fields_not_sent:true,late_response_after_disconnect_ignored:true,html_and_missing_token_keep_binding:true,explicit_po_utc2_profile:true,stale_and_future_still_rejected:true,closed_candles_decoded_before_filter:true,source_time_provenance_retained:true,no_arrival_time_calibration:true,usd_requires_confirmation_when_missing:true,confirmation_scoped_to_account_and_mode:true,explicit_other_currency_cannot_be_overridden:true,currency_confirmation_does_not_replay_balance:true,manual_profile_scoped_to_mode_and_known_source:true,fresh_pending_balance_keeps_original_time:true,pending_balance_not_persisted:true,broker_identity_not_overridden:true,unknown_id_requires_explicit_scoped_confirmation:true,schema_diagnostics_exclude_raw_ids:true,zero_id_rejected:true,balance_changes_without_reconfirmation:true,profile_survives_reconnect_and_restart:true,legacy_confirmation_migrated:true,different_source_requires_confirmation:true,delivery_retry_without_freshening:true,synchronous_context_invalidation_handled:true,collector_restored_without_page_reload:true,visible_balance_uses_configured_account:true}));
 }
 async function realHttp(){
   const api=process.argv[process.argv.indexOf("--api")+1],fixtureToken=process.argv[process.argv.indexOf("--fixture-token")+1];

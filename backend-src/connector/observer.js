@@ -1,13 +1,13 @@
 "use strict";
 // Observes INCOMING messages only. No send() call, login, cookie access or auth export.
 (() => {
-  if(window.__tredObserverVersion==="0.3.8")return;
-  window.__tredObserverVersion="0.3.8";
+  if(window.__tredObserverVersion==="0.3.9")return;
+  window.__tredObserverVersion="0.3.9";
   const Native = window.WebSocket;
   const number = v => typeof v === "number" && Number.isFinite(v);
   const safeSymbol = v => typeof v === "string" && /^[A-Za-z0-9][A-Za-z0-9_./ #-]{1,31}$/.test(v);
   const ts = v => number(v) ? (v > 1e11 ? v / 1000 : v) : null;
-  const emit = events => { if (events.length) window.postMessage({source:"tred-observer-v1", events:events.slice(0,250)}, location.origin); };
+  const emit = events => { for(let i=0;i<events.length;i+=250) window.postMessage({source:"tred-observer-v1",events:events.slice(i,i+250)},location.origin); };
   const accountId = value => (typeof value === "string" || typeof value === "number" && Number.isSafeInteger(value)) && /^\d{1,20}$/.test(String(value)) && !/^0+$/.test(String(value)) ? String(value) : null;
   const idType = value => value===undefined?"none":value===null||value===""?"empty":value===0||typeof value==="string"&&/^0+$/.test(value)?"zero":accountId(value)?typeof value==="number"?"integer":"digits":Array.isArray(value)?"array":["number","string","boolean","object"].includes(typeof value)?typeof value==="string"?"text":typeof value:"other";
   const identity = async (name,data) => {
@@ -75,7 +75,7 @@
     }
     if (["loadHistoryPeriod","updateHistoryNew","candles"].includes(name) && data && safeSymbol(data.asset) && [60,300,900].includes(data.period)) {
       const rows = data.candles || data.history || data.data;
-      if (Array.isArray(rows)) for (const row of rows.slice(-200)) {
+      if (Array.isArray(rows)) for (const row of rows.slice(-1600)) {
         const c = Array.isArray(row) ? {time:ts(row[0]),open:row[1],close:row[2],high:row[3],low:row[4]} : {time:ts(row.time),open:row.open,close:row.close,high:row.high,low:row.low};
         // Closed-bar filtering happens in the worker after the selected source
         // clock is decoded. A raw UTC+2 bar must not be compared with UTC here.

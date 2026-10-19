@@ -14,7 +14,8 @@ import secrets
 import sqlite3
 import time
 
-from market_analysis import rank
+from market_analysis import rank, coverage
+from signal_sessions import SCHEMA, SignalSessions
 
 
 class DomainError(ValueError):
@@ -63,7 +64,7 @@ def digest(value):
     return hashlib.sha256(value.encode()).hexdigest()
 
 
-class Ledger:
+class Ledger(SignalSessions):
     def __init__(self, path, *, clock=time.time):
         self.path, self.clock = Path(path), clock
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -80,6 +81,7 @@ class Ledger:
             CREATE TABLE IF NOT EXISTS paper_trades(id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, symbol TEXT NOT NULL, direction TEXT NOT NULL, stake INTEGER NOT NULL, payout REAL NOT NULL, opened_at REAL NOT NULL, expires_at REAL NOT NULL, entry_price REAL NOT NULL, exit_price REAL, pnl INTEGER, status TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS analysis(id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, created_at REAL NOT NULL, result TEXT NOT NULL);
             """)
+            db.executescript(SCHEMA)
             if "run_day" not in {r[1] for r in db.execute("PRAGMA table_info(risk)")}:
                 db.execute("ALTER TABLE risk ADD COLUMN run_day INTEGER")
 
@@ -97,9 +99,15 @@ class Ledger:
 
     @staticmethod
     def setup(db, uid):
-        settings = {"market": "normal", "selection": "auto", "symbol": None, "expiry": 5, "allow_otc": False}
+        settings = {"market": "normal", "selection": "auto", "symbol": None, "expiry": 5, "allow_otc": False, "min_payout": 85}
         risk = {"daily_loss": "10.00", "daily_target": "20.00", "balance_floor": "90.00", "stake": "1.00", "max_open": 1, "max_overlays": 0, "goal_start": "100.00", "goal_target": "1000.00"}
         db.execute("INSERT OR IGNORE INTO profiles VALUES (?,?)", (uid, json.dumps(settings)))
+        saved = json.loads(db.execute("SELECT settings FROM profiles WHERE user_id=?", (uid,)).fetchone()[0])
+        migrated = {**saved, "min_payout": saved.get("min_payout", 85)}
+        if migrated.get("expiry") not in (5,10,15):
+            migrated["expiry"] = 15 if type(saved.get("expiry")) is int and saved["expiry"] >= 15 else 5
+        if migrated != saved:
+            db.execute("UPDATE profiles SET settings=? WHERE user_id=?", (json.dumps(migrated), uid))
         db.execute("INSERT OR IGNORE INTO risk(user_id,config) VALUES (?,?)", (uid, json.dumps(risk)))
 
     def pair(self, uid):
@@ -126,17 +134,21 @@ class Ledger:
             db.execute("DELETE FROM accounts WHERE user_id=?", (uid,))
             db.execute("DELETE FROM assets WHERE user_id=?", (uid,))
             db.execute("DELETE FROM candles WHERE user_id=?", (uid,))
+            db.execute("DELETE FROM quote_samples WHERE user_id=?", (uid,))
             db.execute("UPDATE risk SET running=0,reason='Связь отключена' WHERE user_id=?", (uid,))
 
     def settings(self, uid, changes):
         with self.db() as db:
             self.setup(db, uid)
             prefs = json.loads(db.execute("SELECT settings FROM profiles WHERE user_id=?", (uid,)).fetchone()[0])
+            prefs.setdefault("min_payout", 85)
             if not isinstance(changes, dict) or not changes or not changes.keys() <= prefs.keys():
                 raise DomainError("Некорректные настройки.")
             prefs.update(changes)
-            if prefs["market"] not in ("normal", "otc") or prefs["selection"] not in ("auto", "manual") or type(prefs["expiry"]) is not int or prefs["expiry"] not in (3,5,10,15,30,60) or type(prefs["allow_otc"]) is not bool:
+            if prefs["market"] not in ("normal", "otc") or prefs["selection"] not in ("auto", "manual") or type(prefs["expiry"]) is not int or prefs["expiry"] not in (5,10,15) or type(prefs["allow_otc"]) is not bool:
                 raise DomainError("Проверь рынок и экспирацию.")
+            if type(prefs["min_payout"]) is not int or not 85 <= prefs["min_payout"] <= 92:
+                raise DomainError("Минимальная выплата — от 85 до 92%. Это выплата брокера, не вероятность выигрыша.")
             if prefs["selection"] == "auto":
                 prefs["symbol"] = None
             else:
@@ -216,18 +228,23 @@ class Ledger:
                 raise DomainError("Для старта нужны свежие данные и подтверждённый сценарий анализа.", 409)
             db.execute("UPDATE risk SET running=?,reason=?,run_day=? WHERE user_id=?", (int(running), None if running else "Остановлено пользователем", int(self.clock()//86400),uid))
 
-    def _candidate(self, db, uid):
+    def _market(self, db, uid):
         prefs = json.loads(db.execute("SELECT settings FROM profiles WHERE user_id=?", (uid,)).fetchone()[0])
-        assets = [{**dict(x),"expiries":json.loads(x["expiries"])} for x in db.execute("SELECT * FROM assets WHERE user_id=? AND price IS NOT NULL", (uid,))]
+        assets = [{**dict(x),"expiries":json.loads(x["expiries"])} for x in db.execute("SELECT * FROM assets WHERE user_id=?", (uid,))]
         histories = {}
         for x in db.execute("SELECT symbol,period,time,open,high,low,close FROM candles WHERE user_id=? ORDER BY time", (uid,)):
             histories.setdefault((x["symbol"], x["period"]), []).append(dict(x))
-        candidates, rejected = rank(assets, histories, expiry=prefs["expiry"], market=prefs["market"], symbol=prefs["symbol"], allow_otc=prefs["allow_otc"], now=self.clock())
+        prefs.setdefault("min_payout", 85)
+        return prefs, assets, histories
+
+    def _candidate(self, db, uid):
+        prefs, assets, histories = self._market(db, uid)
+        candidates, rejected = rank(assets, histories, expiry=prefs["expiry"], market=prefs["market"], symbol=prefs["symbol"], allow_otc=prefs["allow_otc"], min_payout=prefs["min_payout"]/100, now=self.clock())
         if not candidates:
-            return {"status": "skipped", "reason": rejected[0] if rejected else "Нет доступных пар со свежей ценой и историей. Открой нужные графики в Pocket Option."}
-        return {"status": "candidate", **candidates[0], "expiry": prefs["expiry"], "entry_at": self.clock()+30,
-                "expires_at": self.clock()+30+prefs["expiry"]*60, "validated": False,
-                "reason": "Исследовательский сценарий. Проходимость не измерена; только симуляция.", "probability": None}
+            return {"status": "skipped", "expiry": prefs["expiry"], "reason": rejected[0] if rejected else "Нет доступных пар со свежей ценой и историей. Открой нужные графики в Pocket Option."}
+        return {"status": "candidate", **candidates[0], "expiry": prefs["expiry"], "entry_at": self.clock(), "valid_until": self.clock()+30,
+                "expires_at": self.clock()+prefs["expiry"]*60, "validated": False, "min_payout": prefs["min_payout"]/100,
+                "reason": "Сценарий по закрытым свечам. Вход допустим в указанной зоне в ближайшие 30 секунд; при выходе цены из зоны пропусти вход. Проходимость не измерена.", "probability": None}
 
     def signal(self, uid):
         with self.db() as db:
@@ -237,7 +254,9 @@ class Ledger:
                 raise DomainError("Подожди две секунды.", 429)
             risk = self._risk(db,uid)
             result = {"status":"skipped","reason":risk["reason"]} if risk["locked"] else self._candidate(db, uid)
-            db.execute("INSERT INTO analysis(user_id,created_at,result) VALUES (?,?,?)", (uid, self.clock(), json.dumps(result)))
+            cursor = db.execute("INSERT INTO analysis(user_id,created_at,result) VALUES (?,?,?)", (uid, self.clock(), json.dumps(result)))
+            result["analysis_id"] = cursor.lastrowid
+            db.execute("UPDATE analysis SET result=? WHERE id=?", (json.dumps(result), cursor.lastrowid))
             db.execute("DELETE FROM analysis WHERE user_id=? AND id NOT IN (SELECT id FROM analysis WHERE user_id=? ORDER BY id DESC LIMIT 100)", (uid, uid))
         return result
 
@@ -315,19 +334,22 @@ class Ledger:
             db.execute("INSERT INTO assets(user_id,symbol,market,is_open,payout,updated_at,expiries) VALUES (?,?,?,?,?,?,?) ON CONFLICT(user_id,symbol) DO UPDATE SET market=excluded.market,is_open=excluded.is_open,payout=excluded.payout,updated_at=excluded.updated_at,expiries=excluded.expiries WHERE excluded.updated_at>assets.updated_at", (uid,pair,e["market"],int(e["is_open"]),payout,at,json.dumps(expiries)))
         elif kind == "quote":
             pair, price = symbol(e.get("symbol")), e.get("price")
-            if type(price) not in (int,float) or not math.isfinite(price) or price <= 0:
+            if type(price) not in (int,float) or not math.isfinite(price) or not 0 < price <= 1e9:
                 raise DomainError("Некорректная цена.")
             db.execute("UPDATE assets SET price=?,quote_time=? WHERE user_id=? AND symbol=? AND (quote_time IS NULL OR quote_time<?)", (price,at,uid,pair,at))
+            if db.execute("SELECT 1 FROM assets WHERE user_id=? AND symbol=?", (uid,pair)).fetchone():
+                db.execute("INSERT OR IGNORE INTO quote_samples VALUES (?,?,?,?)", (uid,pair,int(at),price))
+                db.execute("DELETE FROM quote_samples WHERE user_id=? AND symbol=? AND time<?", (uid,pair,now-7200))
         elif kind == "candle":
             pair, period = symbol(e.get("symbol")), e.get("period")
             prices = [e.get(k) for k in ("open","high","low","close")]
-            if type(period) is not int or period not in (60,300,900) or any(type(v) not in (int,float) or not math.isfinite(v) or v <= 0 for v in prices):
+            if type(period) is not int or period not in (60,300,900) or any(type(v) not in (int,float) or not math.isfinite(v) or not 0 < v <= 1e9 for v in prices):
                 raise DomainError("Некорректная свеча.")
             o,h,l,c = prices
             if l > min(o,c) or h < max(o,c) or at+period > now or at % period > 1:
                 raise DomainError("Свеча ещё открыта или нарушен OHLC.")
             db.execute("INSERT OR IGNORE INTO candles VALUES (?,?,?,?,?,?,?,?)", (uid,pair,period,at,o,h,l,c))
-            db.execute("DELETE FROM candles WHERE user_id=? AND symbol=? AND period=? AND time<?", (uid,pair,period,now-320*period))
+            db.execute("DELETE FROM candles WHERE user_id=? AND symbol=? AND period=? AND time<?", (uid,pair,period,now-1600*period))
 
     def _settle(self, db, uid, now):
         # The first observed quote within five seconds of expiry is used. Missing
@@ -384,11 +406,14 @@ class Ledger:
                 t["stake"], t["pnl"] = amount(t["stake"]), None if t["pnl"] is None else amount(t["pnl"])
             outcomes = {r[0]:r[1] for r in db.execute("SELECT status,count(*) FROM manual_trades WHERE user_id=? GROUP BY status", (uid,))}
             rows = db.execute("SELECT created_at,result FROM analysis WHERE user_id=? ORDER BY id DESC LIMIT 10", (uid,)).fetchall()
-            recent = [{"created_at":r[0], **json.loads(r[1]), "expiry":prefs["expiry"]} for r in rows]
+            recent = [{"created_at":r[0], **json.loads(r[1]), "expiry":json.loads(r[1]).get("expiry",prefs["expiry"])} for r in rows]
             wins, losses = outcomes.get("win",0), outcomes.get("loss",0)
             paired = db.execute("SELECT 1 FROM pairing WHERE user_id=? AND token_hash IS NOT NULL AND token_expires>?", (uid,now)).fetchone() is not None
             live = bool(db.execute("SELECT 1 FROM assets WHERE user_id=? AND quote_time>?", (uid,now-10)).fetchone())
             count = db.execute("SELECT count(*) FROM assets WHERE user_id=? AND is_open=1 AND updated_at>?", (uid,now-60)).fetchone()[0]
+            sessions = self._sessions(db, uid, now)
+            market_prefs, market_assets, market_histories = self._market(db, uid)
+            feed = coverage(market_assets, market_histories, market=prefs["market"], expiry=prefs["expiry"], min_payout=market_prefs["min_payout"]/100, now=now)
             # Goal follows settled trades observed by this connector, never deposits.
             real_account = next((a for a in accounts if a["mode"]=="real"),None)
             goal_pnl = db.execute("SELECT COALESCE(sum(pnl),0) FROM manual_trades WHERE user_id=? AND mode='real' AND account_id=? AND status!='open'", (uid,real_account["id"] if real_account else "")).fetchone()[0]
@@ -396,5 +421,5 @@ class Ledger:
         return {"mode":"api", "user":user, "preferences":prefs, "risk":risk, "accounts":accounts, "trades":trades, "paper_trades":paper,
                 "goal":{"start":amount(start), "target":amount(target), "earned":amount(goal_pnl), "current":amount(start+goal_pnl), "progress":max(0,min(1,goal_pnl/(target-start))), "source":"observed_real_settlements", "available":real_account is not None},
                 "statistics":{"signals":sum(outcomes.values()),"wins":wins,"losses":losses,"draws":outcomes.get("draw",0),"win_rate":wins/(wins+losses) if wins+losses else None},
-                "connection":{"authenticated":paired,"live":live,"model_ready":False,"reason":"Котировки поступают. Стратегия пока исследовательская." if live else "Подключи модуль браузера для котировок, баланса и сделок."},
-                "recent_requests":recent, "catalog":{"verified_count":count}, "minimum_expiry":3, "bot_username":"Tr1edBot_bot", "server_time":now}
+                "connection":{"authenticated":paired,"live":live,"model_ready":False,"reason":"Котировки поступают. Анализ по проверяемым правилам структуры." if live else "Подключи модуль браузера для котировок, баланса и сделок."},
+                "signal_sessions":sessions, "signal_version":1, "feed":feed, "recent_requests":recent, "catalog":{"verified_count":count}, "minimum_expiry":5, "bot_username":"Tr1edBot_bot", "server_time":now}
