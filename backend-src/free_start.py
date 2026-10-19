@@ -6,13 +6,13 @@ import os
 from pathlib import Path
 import platform
 import queue
-import re
 import subprocess
 import sys
 import threading
 import time
 from urllib.error import HTTPError, URLError
 from urllib.request import ProxyHandler, build_opener, urlopen
+from tunnel_check import public_probe,quick_url,tunnel_command,tunnel_event
 
 ROOT = Path(__file__).resolve().parent
 RELEASE = "2026.10.1"
@@ -98,12 +98,32 @@ def main():
             print("Локальный режим. Для телефона нужен HTTPS-туннель.",flush=True)
             backend.wait()
             return
-        tunnel=subprocess.Popen([str(executable),"tunnel","--url",f"http://127.0.0.1:{args.port}","--no-autoupdate"],cwd=ROOT,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,encoding="utf-8",errors="replace")
-        output=queue.Queue()
+        print("Подключаем внешний адрес Cloudflare по HTTP/2…",flush=True)
+        tunnel=subprocess.Popen(tunnel_command(executable,args.port),cwd=ROOT,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,encoding="utf-8",errors="replace")
+        output=queue.Queue(maxsize=256)
+        diagnostic={"protocol":"http2","stage":"waiting_for_address","url_assigned":False,"channel":"WAITING","https":"NOT_CHECKED"}
+        def record():
+            target=args.data_dir/"tunnel-diagnostics.json"
+            target.write_text(json.dumps(diagnostic,indent=2)+"\n",encoding="utf-8")
+        def consume(line):
+            if line is not None:
+                event=tunnel_event(line)
+                if event:diagnostic["channel"]=event
+        def drain():
+            while True:
+                try:consume(output.get_nowait())
+                except queue.Empty:break
+        def put(line):
+            try:output.put_nowait(line)
+            except queue.Full:
+                try:output.get_nowait()
+                except queue.Empty:pass
+                try:output.put_nowait(line)
+                except queue.Full:pass
         def read():
             for line in tunnel.stdout:
-                output.put(line[:4000])
-            output.put(None)
+                put(line[:4000])
+            put(None)
         threading.Thread(target=read,daemon=True).start()
         deadline=time.monotonic()+60
         url=None
@@ -111,25 +131,35 @@ def main():
             try: line=output.get(timeout=1)
             except queue.Empty: continue
             if line is None: break
-            found=re.search(r"https://[a-z0-9-]+\.trycloudflare\.com",line)
-            if found: url=found[0]; break
+            consume(line)
+            found=quick_url(line)
+            if found: url=found; break
         if not url:
-            raise ValueError("Cloudflare не выдал адрес. Проверь доступность Tunnel в своей сети; личные данные не отправлялись.")
+            drain();diagnostic["exit_code"]=tunnel.poll();record()
+            raise ValueError("Cloudflare не выдал адрес. Канал: "+diagnostic["channel"]+". Диагностика: "+str(args.data_dir/"tunnel-diagnostics.json"))
         # A URL in stdout alone does not establish an operational public route.
-        for attempt in range(15):
-            try:
-                with urlopen(url+"/healthz",timeout=4) as response:
-                    if json.load(response).get("service") == "tred-backend": break
-            except (OSError,ValueError): pass
-            if attempt==14: raise ValueError("Адрес получен, но HTTPS-доступ к API не подтверждён. Туннель остановлен.")
+        diagnostic.update(stage="checking_https",url_assigned=True)
+        print("Адрес выдан. Проверяем HTTPS-доступ; результат будет виден ниже.",flush=True)
+        for attempt in range(18):
+            drain()
+            if tunnel.poll() is not None:break
+            diagnostic["https"]=public_probe(url)
+            if diagnostic["https"]=="OK":break
+            if attempt%3==0:
+                print("Проверка HTTPS: "+diagnostic["https"]+"; канал: "+diagnostic["channel"],flush=True)
             time.sleep(1)
+        if diagnostic["https"]!="OK":
+            drain();diagnostic["exit_code"]=tunnel.poll();record()
+            raise ValueError("HTTPS-доступ не подтверждён: "+diagnostic["https"]+"; канал: "+diagnostic["channel"]+". Диагностика: "+str(args.data_dir/"tunnel-diagnostics.json"))
+        diagnostic["stage"]="ready";record()
         (args.data_dir/"server-url.txt").write_text(url+"\n",encoding="utf-8")
         print("\nВ кабинете TRED нажми «Подключить кабинет» и вставь:\n"+url,flush=True)
         print("Этот же адрес и одноразовый код укажи в модуле браузера.\nНе закрывай это окно, компьютер и вкладку Pocket Option.\nПосле нового запуска адрес может измениться. Ctrl+C — остановить.",flush=True)
         # Drain logs without retaining or displaying arbitrary tunnel output.
         while tunnel.poll() is None and backend.poll() is None:
-            try: output.get(timeout=1)
+            try:consume(output.get(timeout=1))
             except queue.Empty: pass
+        diagnostic["stage"]="connection_closed";diagnostic["exit_code"]=tunnel.poll();record()
         raise ValueError("Связь завершилась. Новые данные не поступают; запусти TRED заново.")
     finally:
         for process in (tunnel,backend):
