@@ -51,7 +51,7 @@ with tempfile.TemporaryDirectory(prefix="tred-signal-ui-") as temporary:
             desktop.locator('[data-market="otc"]').click()
             expect(desktop.locator("#feed-coverage")).to_contain_text("готовы к анализу: 0")
             desktop.locator("#request-signal").click()
-            expect(desktop.locator("#signal-result")).to_contain_text("Нужно 80 закрытых свечей")
+            expect(desktop.locator("#signal-result")).to_contain_text("нужны 80 закрытых свечей")
             assert desktop.locator("#watch-entry").count()==0
             bars=[{"type":"candle","symbol":"EURUSD_otc","period":period,**row} for period in (60,300,900) for row in fixture(period,int(current[0]))]
             for i in range(0,len(bars),200):ledger.ingest(token,{"events":bars[i:i+200]})

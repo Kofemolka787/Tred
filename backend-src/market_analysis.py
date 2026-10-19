@@ -4,6 +4,8 @@ OB, FVG and liquidity sweeps describe candle patterns, not actual OTC orders.
 Only completed, contiguous bars and already-confirmed pivots are considered.
 """
 import math
+import json
+from market_feed import gate
 
 
 PERIODS = {5: (60, 300), 10: (60, 300), 15: (300, 900)}
@@ -27,15 +29,34 @@ def aggregate(rows, source, target, now):
             continue
         bars = [group[t] for t in expected]
         result.append({"time": start, "open": bars[0]["open"], "close": bars[-1]["close"],
-                       "high": max(b["high"] for b in bars), "low": min(b["low"] for b in bars)})
+                       "high": max(b["high"] for b in bars), "low": min(b["low"] for b in bars), "origin": "ticks" if any(b.get("origin")=="ticks" for b in bars) else "broker"})
     return result
 
 
 def history(histories, pair, period, now):
-    native = histories.get((pair, period), [])
-    derived = aggregate(histories.get((pair, 60), []), 60, period, now) if period > 60 else []
-    # Prefer native OHLC for an existing timestamp; never mix users or symbols.
-    return sorted({r["time"]: r for r in [*derived, *native]}.values(), key=lambda r: r["time"])
+    merged={}
+    for source in (60,120,300,600):
+        if source < period and period % source == 0:
+            for row in aggregate(histories.get((pair,source),[]),source,period,now):
+                merged[row["time"]]=row
+    for row in histories.get((pair,period),[]):
+        merged[row["time"]]=row
+    return sorted(merged.values(),key=lambda r:r["time"])
+
+
+def frame_data(histories,pair,expiry,now):
+    preferred=PERIODS.get(expiry,(60,300))
+    plans=list(dict.fromkeys((preferred,(120,600),(60,300),(300,900))))
+    fallback=None
+    for plan in plans:
+        bars=[history(histories,pair,p,now) for p in plan]
+        checks=[analyze(r,p,now) for r,p in zip(bars,plan)]
+        result=(plan,bars,checks)
+        if all(a.get("history_ready") for a in checks):
+            return result
+        if fallback is None or min(len(r) for r in bars)>min(len(r) for r in fallback[1]):
+            fallback=result
+    return fallback
 
 
 def analyze(candles, period, now):
@@ -69,6 +90,8 @@ def analyze(candles, period, now):
     up = direction == "up"
     evidence = ["HH/HL: максимумы и минимумы повышаются." if up else "LH/LL: максимумы и минимумы понижаются.",
                 "Цена и средние 20/50 подтверждают направление; средние используются только как фильтр."]
+    if any(r.get("origin")=="ticks" for r in rows):
+        evidence.append("Часть OHLC построена по полученным тикам без заполнения пропусков. Это наблюдаемая история цен, не подтверждённые брокером свечи.")
     zones, events = [], []
     sweep = False
     for i in range(len(rows) - 5, len(rows)):
@@ -153,25 +176,21 @@ def rank(assets, histories, *, expiry, market, symbol, allow_otc, now, min_payou
     for asset in assets:
         if symbol and normalize(asset["symbol"]) != normalize(symbol) or asset["market"] != market:
             continue
-        if expiry not in asset.get("expiries", []):
-            rejected.append("Экспирация не подтверждена каталогом брокера.")
-            continue
         if asset["market"] == "otc" and not allow_otc:
-            rejected.append("Разреши OTC в настройках анализа или выбери вкладку OTC.")
+            rejected.append((0,"Разреши OTC в настройках анализа или выбери вкладку OTC."))
             continue
-        if asset["payout"] < min_payout:
-            rejected.append(f"Выплата ниже выбранного минимума {round(min_payout*100)}%.")
+        status=gate(asset,expiry=expiry,min_payout=min_payout,now=now)
+        if status["code"] != "ready":
+            priority={"closed":0,"payout":1,"expiry":2,"catalog":3,"quote":4}[status["code"]]
+            rejected.append((priority,status["reason"]))
             continue
-        if not asset["is_open"] or asset.get("quote_time") is None or now - asset["updated_at"] > 60 or now - asset["quote_time"] > 10:
-            rejected.append("Нет свежей цены или подтверждения доступности пары.")
-            continue
-        analyses = [analyze(history(histories, asset["symbol"], p, now), p, now) for p in periods]
+        periods,bars,analyses=frame_data(histories,asset["symbol"],expiry,now)
         first, context = analyses
         if first["status"] == "candidate" and context.get("context_ready") and first["direction"] == context["direction"]:
             up = first["direction"] == "up"
             price = asset["price"]
             if abs(price-first["close"]) > .5*first["atr"] or (price <= first["invalidation"] if up else price >= first["invalidation"]):
-                rejected.append("Цена уже ушла от зоны или нарушила условие сценария. Вход пропущен.")
+                rejected.append((7,"Цена уже ушла от зоны или нарушила условие сценария. Вход пропущен."))
                 continue
             results.append({"symbol": asset["symbol"], "market": asset["market"], "direction": first["direction"],
                             "score": first["score"]+context["score"], "evidence": [*first["evidence"], f"Старший M{periods[1]//60} подтверждает направление структуры."],
@@ -179,10 +198,12 @@ def rank(assets, histories, *, expiry, market, symbol, allow_otc, now, min_payou
                             "quote_time": asset["quote_time"], "zones": first["zones"], "events": first["events"],
                             "channel": first["channel"], "invalidation": first["invalidation"], "atr": first["atr"],
                             "entry_low": price-.35*first["atr"], "entry_high": price+.35*first["atr"],
-                            "bar_time": first["bar_time"], "candles": history(histories, asset["symbol"], periods[0], now)[-60:]})
+                            "catalog_age": status["catalog_age"], "catalog_source": status["catalog_source"],
+                            "bar_time": first["bar_time"], "candles": bars[0][-60:]})
         else:
-            rejected.append(next((a["reason"] for a in analyses if not a.get("context_ready")), first["reason"] if first["status"] != "candidate" else "Таймфреймы расходятся: вход пропущен."))
-    return sorted(results, key=lambda x: (x["payout"] < .92, -x["score"], -x["payout"], x["symbol"])), rejected
+            reason=next((a["reason"] for a in analyses if not a.get("context_ready")), first["reason"] if first["status"] != "candidate" else "Таймфреймы расходятся: вход пропущен.")
+            rejected.append((6 if all(a.get("history_ready") for a in analyses) else 5,reason))
+    return sorted(results, key=lambda x: (x["payout"] < .92, -x["score"], -x["payout"], x["symbol"])), [reason for _,reason in sorted(rejected,key=lambda r:-r[0])]
 
 
 def coverage(assets, histories, *, market, expiry, min_payout, now):
@@ -191,14 +212,17 @@ def coverage(assets, histories, *, market, expiry, min_payout, now):
     for asset in assets:
         if asset["market"] != market:
             continue
-        bars = [history(histories, asset["symbol"], p, now) for p in periods]
-        checks = [analyze(r, p, now) for r, p in zip(bars, periods)]
-        quote_live = asset.get("quote_time") is not None and now - asset["quote_time"] <= 10
-        eligible = bool(asset["is_open"] and now-asset["updated_at"] <= 60 and asset["payout"] >= min_payout and expiry in asset["expiries"])
+        selected,bars,checks=frame_data(histories,asset["symbol"],expiry,now)
+        status=gate(asset,expiry=expiry,min_payout=min_payout,now=now)
+        quote_live,eligible=status["quote_live"],status["eligible"]
         rows.append({"symbol": asset["symbol"], "payout": asset["payout"], "eligible": eligible,
-                     "quote_live": quote_live, "price": asset.get("price"), "quote_time": asset.get("quote_time"), "bars": [len(r) for r in bars],
+                     "quote_live": quote_live, "price": asset.get("price"), "quote_time": asset.get("quote_time"), "timeframes":list(selected), "tick_bars":[sum(r.get("origin")=="ticks" for r in rows) for rows in bars], "bars": [len(r) for r in bars],
                      "history_ready": all(a.get("history_ready") for a in checks),
-                     "reason": next((a["reason"] for a in checks if not a.get("context_ready")), "Данные для анализа получены.")})
-    return {"catalog": len(rows), "eligible": sum(r["eligible"] for r in rows), "quoted": sum(r["quote_live"] for r in rows),
+                     "stage": status["code"] if status["code"]!="ready" else "history" if not all(a.get("history_ready") for a in checks) else "structure",
+                     "catalog_age":status["catalog_age"],"catalog_source":status["catalog_source"],
+                     "history_status":json.loads(asset["history_status"]) if asset.get("history_status") else None,
+                     "reason":status["reason"] if status["code"]!="ready" else next((a["reason"] for a in checks if not a.get("context_ready")), "Данные для анализа получены.")})
+    stages={name:sum(r["stage"]==name for r in rows) for name in ("closed","payout","expiry","catalog","quote","history","structure")}
+    return {"blocked":stages,"catalog": len(rows), "eligible": sum(r["eligible"] for r in rows), "quoted": sum(r["quote_live"] for r in rows),
             "ready": sum(r["eligible"] and r["quote_live"] and r["history_ready"] for r in rows),
             "timeframes": list(periods), "pairs": sorted(rows, key=lambda r: (-r["eligible"], -r["quote_live"], -r["payout"], r["symbol"]))[:100]}

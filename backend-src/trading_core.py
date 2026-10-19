@@ -16,6 +16,7 @@ import time
 
 from market_analysis import rank, coverage
 from signal_sessions import SCHEMA, SignalSessions
+from market_feed import FEED_ID, migrate as migrate_feed, live_tick, catalog_current
 
 
 class DomainError(ValueError):
@@ -82,6 +83,7 @@ class Ledger(SignalSessions):
             CREATE TABLE IF NOT EXISTS analysis(id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, created_at REAL NOT NULL, result TEXT NOT NULL);
             """)
             db.executescript(SCHEMA)
+            migrate_feed(db)
             if "run_day" not in {r[1] for r in db.execute("PRAGMA table_info(risk)")}:
                 db.execute("ALTER TABLE risk ADD COLUMN run_day INTEGER")
 
@@ -135,6 +137,7 @@ class Ledger(SignalSessions):
             db.execute("DELETE FROM assets WHERE user_id=?", (uid,))
             db.execute("DELETE FROM candles WHERE user_id=?", (uid,))
             db.execute("DELETE FROM quote_samples WHERE user_id=?", (uid,))
+            db.execute("DELETE FROM live_bars WHERE user_id=?", (uid,))
             db.execute("UPDATE risk SET running=0,reason='Связь отключена' WHERE user_id=?", (uid,))
 
     def settings(self, uid, changes):
@@ -232,17 +235,24 @@ class Ledger(SignalSessions):
         prefs = json.loads(db.execute("SELECT settings FROM profiles WHERE user_id=?", (uid,)).fetchone()[0])
         assets = [{**dict(x),"expiries":json.loads(x["expiries"])} for x in db.execute("SELECT * FROM assets WHERE user_id=?", (uid,))]
         histories = {}
-        for x in db.execute("SELECT symbol,period,time,open,high,low,close FROM candles WHERE user_id=? ORDER BY time", (uid,)):
+        for x in db.execute("SELECT symbol,period,time,open,high,low,close,origin FROM candles WHERE user_id=? ORDER BY time", (uid,)):
             histories.setdefault((x["symbol"], x["period"]), []).append(dict(x))
         prefs.setdefault("min_payout", 85)
         return prefs, assets, histories
 
     def _candidate(self, db, uid):
+        started=time.perf_counter()
         prefs, assets, histories = self._market(db, uid)
         candidates, rejected = rank(assets, histories, expiry=prefs["expiry"], market=prefs["market"], symbol=prefs["symbol"], allow_otc=prefs["allow_otc"], min_payout=prefs["min_payout"]/100, now=self.clock())
+        elapsed=round((time.perf_counter()-started)*1000,1)
         if not candidates:
-            return {"status": "skipped", "expiry": prefs["expiry"], "reason": rejected[0] if rejected else "Нет доступных пар со свежей ценой и историей. Открой нужные графики в Pocket Option."}
-        return {"status": "candidate", **candidates[0], "expiry": prefs["expiry"], "entry_at": self.clock(), "valid_until": self.clock()+30,
+            details=coverage(assets,histories,market=prefs["market"],expiry=prefs["expiry"],min_payout=prefs["min_payout"]/100,now=self.clock())
+            waiting=details["ready"]==0
+            reason=rejected[0] if rejected else "Нет доступных пар со свежей ценой и историей. Открой нужные графики в Pocket Option."
+            if details["blocked"]["history"] and waiting:
+                reason="Цены поступают, но для анализа нужны 80 закрытых свечей на каждом из двух совместимых таймфреймов. Открой график M1 или M2 в Pocket Option. История ещё загружается либо пока не распознана; отсутствие истории не означает отсутствие сделки."
+            return {"status":"skipped","waiting_data":waiting,"elapsed_ms":elapsed,"expiry":prefs["expiry"],"reason":reason,"checked_pairs":details["ready"]}
+        return {"status": "candidate", **candidates[0], "elapsed_ms":elapsed,"checked_pairs":len(candidates), "expiry": prefs["expiry"], "entry_at": self.clock(), "valid_until": self.clock()+30,
                 "expires_at": self.clock()+prefs["expiry"]*60, "validated": False, "min_payout": prefs["min_payout"]/100,
                 "reason": "Сценарий по закрытым свечам. Вход допустим в указанной зоне в ближайшие 30 секунд; при выходе цены из зоны пропусти вход. Проходимость не измерена.", "probability": None}
 
@@ -286,11 +296,31 @@ class Ledger(SignalSessions):
                   "asset": {"type","symbol","market","is_open","payout","time"},
                   "quote": {"type","symbol","price","time"},
                   "candle": {"type","symbol","period","time","open","high","low","close"}}
-        fields["asset"].add("expiries")
+        fields["asset"].update(("expiries","feed_id"))
+        fields["quote"].add("feed_id")
+        fields["candle"].add("origin")
+        fields["feed"] = {"type","feed_id","connected","time"}
+        fields["history_status"] = {"type","symbol","event","period","rows","bars","code","time"}
         required = {"account":{"mode","account_id","currency","balance"},"trade":{"mode","account_id","id","symbol","direction","stake","opened_at","expires_at","status"},"asset":{"symbol","market","is_open","payout","expiries"},"quote":{"symbol","price"},"candle":{"symbol","period","open","high","low","close"}}
+        required["feed"] = {"feed_id","connected"}
+        required["history_status"] = {"symbol","event","period","rows","bars","code"}
         if kind not in fields or not e.keys() <= fields[kind] or not required[kind] <= e.keys():
             raise DomainError("Пакет содержит неподдерживаемые поля.")
         at = stamp(e.get("time"), now, history=kind in ("trade","candle"))
+        feed_id = e.get("feed_id")
+        if "feed_id" in e and (not isinstance(feed_id,str) or not FEED_ID.fullmatch(feed_id)):
+            raise DomainError("Неподдерживаемый идентификатор канала.")
+        if kind == "history_status":
+            if e["event"] not in ("loadHistoryPeriod","loadHistoryPeriodFast","updateHistoryNew","updateHistoryNewFast","candles","history") or e["code"] not in ("ohlc","ticks","empty","period_missing","unsupported_period","format_unrecognized") or any(type(e[k]) is not int or not 0<=e[k]<=limit for k,limit in (("period",86400),("rows",60000),("bars",10000))):
+                raise DomainError("Неподдерживаемая диагностика истории.")
+            status={k:e[k] for k in ("event","period","rows","bars","code","time")}
+            db.execute("UPDATE assets SET history_status=? WHERE user_id=? AND symbol=?",(json.dumps(status),uid,symbol(e["symbol"])))
+            return
+        if kind == "feed":
+            if e["connected"] is not False:
+                raise DomainError("Каталог подтверждается только новым сообщением брокера.")
+            db.execute("UPDATE assets SET feed_connected=0 WHERE user_id=? AND catalog_feed=?", (uid,feed_id))
+            return
         if kind in ("account", "trade"):
             mode, account = e.get("mode"), str(e.get("account_id", ""))
             if mode not in ("demo", "real") or not re.fullmatch(r"[0-9]{1,20}", account):
@@ -329,26 +359,30 @@ class Ledger(SignalSessions):
             pair = symbol(e.get("symbol"))
             payout = e.get("payout")
             expiries = e.get("expiries")
-            if e.get("market") not in ("normal","otc") or type(e.get("is_open")) is not bool or type(payout) not in (int,float) or not math.isfinite(payout) or not 0 < payout <= 1 or not isinstance(expiries,list) or len(expiries)>100 or any(type(x) is not int or not 1<=x<=1440 for x in expiries):
+            if e.get("market") not in ("normal","otc") or type(e.get("is_open")) is not bool or type(payout) not in (int,float) or not math.isfinite(payout) or not 0 <= payout <= 1 or e["is_open"] and payout == 0 or not isinstance(expiries,list) or len(expiries)>100 or any(type(x) is not int or not 1<=x<=1440 for x in expiries):
                 raise DomainError("Некорректная доступность или выплата пары.")
-            db.execute("INSERT INTO assets(user_id,symbol,market,is_open,payout,updated_at,expiries) VALUES (?,?,?,?,?,?,?) ON CONFLICT(user_id,symbol) DO UPDATE SET market=excluded.market,is_open=excluded.is_open,payout=excluded.payout,updated_at=excluded.updated_at,expiries=excluded.expiries WHERE excluded.updated_at>assets.updated_at", (uid,pair,e["market"],int(e["is_open"]),payout,at,json.dumps(expiries)))
+            db.execute("INSERT INTO assets(user_id,symbol,market,is_open,payout,updated_at,expiries,catalog_feed,feed_connected) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(user_id,symbol) DO UPDATE SET market=excluded.market,is_open=excluded.is_open,payout=excluded.payout,updated_at=excluded.updated_at,expiries=excluded.expiries,catalog_feed=excluded.catalog_feed,feed_connected=excluded.feed_connected WHERE excluded.updated_at>assets.updated_at", (uid,pair,e["market"],int(e["is_open"]),payout,at,json.dumps(expiries),feed_id,int(feed_id is not None)))
         elif kind == "quote":
             pair, price = symbol(e.get("symbol")), e.get("price")
             if type(price) not in (int,float) or not math.isfinite(price) or not 0 < price <= 1e9:
                 raise DomainError("Некорректная цена.")
-            db.execute("UPDATE assets SET price=?,quote_time=? WHERE user_id=? AND symbol=? AND (quote_time IS NULL OR quote_time<?)", (price,at,uid,pair,at))
+            db.execute("UPDATE assets SET price=?,quote_time=?,quote_feed=? WHERE user_id=? AND symbol=? AND (quote_time IS NULL OR quote_time<?)", (price,at,feed_id,uid,pair,at))
             if db.execute("SELECT 1 FROM assets WHERE user_id=? AND symbol=?", (uid,pair)).fetchone():
+                live_tick(db,uid,pair,at,price)
                 db.execute("INSERT OR IGNORE INTO quote_samples VALUES (?,?,?,?)", (uid,pair,int(at),price))
                 db.execute("DELETE FROM quote_samples WHERE user_id=? AND symbol=? AND time<?", (uid,pair,now-7200))
         elif kind == "candle":
             pair, period = symbol(e.get("symbol")), e.get("period")
             prices = [e.get(k) for k in ("open","high","low","close")]
-            if type(period) is not int or period not in (60,300,900) or any(type(v) not in (int,float) or not math.isfinite(v) or not 0 < v <= 1e9 for v in prices):
+            if type(period) is not int or period not in (60,120,300,600,900) or any(type(v) not in (int,float) or not math.isfinite(v) or not 0 < v <= 1e9 for v in prices):
                 raise DomainError("Некорректная свеча.")
             o,h,l,c = prices
             if l > min(o,c) or h < max(o,c) or at+period > now or at % period > 1:
                 raise DomainError("Свеча ещё открыта или нарушен OHLC.")
-            db.execute("INSERT OR IGNORE INTO candles VALUES (?,?,?,?,?,?,?,?)", (uid,pair,period,at,o,h,l,c))
+            origin = e.get("origin","broker")
+            if origin not in ("broker","ticks"):
+                raise DomainError("Неподдерживаемый источник свечи.")
+            db.execute("INSERT INTO candles(user_id,symbol,period,time,open,high,low,close,origin) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(user_id,symbol,period,time) DO UPDATE SET open=excluded.open,high=excluded.high,low=excluded.low,close=excluded.close,origin=excluded.origin WHERE candles.origin='ticks' AND excluded.origin='broker'", (uid,pair,period,at,o,h,l,c,origin))
             db.execute("DELETE FROM candles WHERE user_id=? AND symbol=? AND period=? AND time<?", (uid,pair,period,now-1600*period))
 
     def _settle(self, db, uid, now):
@@ -378,7 +412,7 @@ class Ledger(SignalSessions):
             guard = self._risk(db, uid, additional=stake)
             if guard["reason"]:
                 return
-            fresh = db.execute("SELECT 1 FROM assets WHERE user_id=? AND is_open=1 AND quote_time>? AND updated_at>?",(uid,now-10,now-60)).fetchone()
+            fresh = any(catalog_current(dict(a),now) for a in db.execute("SELECT * FROM assets WHERE user_id=? AND is_open=1 AND quote_time>?",(uid,now-10)))
             if not fresh:
                 db.execute("UPDATE risk SET running=0,reason='Связь с котировками потеряна. Требуется ручной старт' WHERE user_id=?",(uid,))
                 return
@@ -412,7 +446,7 @@ class Ledger(SignalSessions):
             wins, losses = outcomes.get("win",0), outcomes.get("loss",0)
             paired = db.execute("SELECT 1 FROM pairing WHERE user_id=? AND token_hash IS NOT NULL AND token_expires>?", (uid,now)).fetchone() is not None
             live = bool(db.execute("SELECT 1 FROM assets WHERE user_id=? AND quote_time>?", (uid,now-10)).fetchone())
-            count = db.execute("SELECT count(*) FROM assets WHERE user_id=? AND is_open=1 AND updated_at>?", (uid,now-60)).fetchone()[0]
+            count = sum(catalog_current(dict(a),now) for a in db.execute("SELECT * FROM assets WHERE user_id=? AND is_open=1",(uid,)))
             sessions = self._sessions(db, uid, now)
             market_prefs, market_assets, market_histories = self._market(db, uid)
             feed = coverage(market_assets, market_histories, market=prefs["market"], expiry=prefs["expiry"], min_payout=market_prefs["min_payout"]/100, now=now)
@@ -424,4 +458,4 @@ class Ledger(SignalSessions):
                 "goal":{"start":amount(start), "target":amount(target), "earned":amount(goal_pnl), "current":amount(start+goal_pnl), "progress":max(0,min(1,goal_pnl/(target-start))), "source":"observed_real_settlements", "available":real_account is not None},
                 "statistics":{"signals":sum(outcomes.values()),"wins":wins,"losses":losses,"draws":outcomes.get("draw",0),"win_rate":wins/(wins+losses) if wins+losses else None},
                 "connection":{"authenticated":paired,"live":live,"model_ready":False,"reason":"Котировки поступают. Анализ по проверяемым правилам структуры." if live else "Подключи модуль браузера для котировок, баланса и сделок."},
-                "signal_sessions":sessions, "signal_version":1, "feed":feed, "recent_requests":recent, "catalog":{"verified_count":count}, "minimum_expiry":5, "bot_username":"Tr1edBot_bot", "server_time":now}
+                "signal_sessions":sessions, "signal_version":1, "market_data_version":2, "feed":feed, "recent_requests":recent, "catalog":{"verified_count":count}, "minimum_expiry":5, "bot_username":"Tr1edBot_bot", "server_time":now}

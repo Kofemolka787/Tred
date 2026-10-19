@@ -61,7 +61,7 @@ window.TredSignals=(()=>{
   function show(result){
     chosen=result.status==="candidate"?result:null;
     const host=$("#signal-result");host.replaceChildren();host.hidden=false;
-    if(!chosen){host.append(node("h3","","Подходящего входа пока нет"),node("p","",result.reason||"Ждём подтверждённые условия."));return;}
+    if(!chosen){host.append(node("h3","",result.waiting_data?"Не хватает данных для анализа":"Подходящего входа пока нет"),node("p","",result.reason||"Ждём подтверждённые условия."));return;}
     host.append(node("p","eyebrow",`${result.market==="otc"?"OTC":"ОБЫЧНЫЙ РЫНОК"} · СЦЕНАРИЙ ПО СТРУКТУРЕ`),node("h2","",`${result.symbol} ${result.direction==="up"?"↑ ВВЕРХ":"↓ ВНИЗ"}`),node("p","",`${result.expiry} мин · выплата ${Math.round(result.payout*100)}% · анализ M${result.timeframes[0]/60} + M${result.timeframes[1]/60}`));
     const canvas=node("div","market-chart");chart(canvas,result);host.append(canvas);
     const status=node("p","entry-window","Окно входа: "),time=node("strong");time.dataset.until=result.valid_until;status.append(time);host.append(status);
@@ -87,11 +87,21 @@ window.TredSignals=(()=>{
     const feed=state.feed;
     $("#feed-coverage").textContent=feed?`Каталог: ${feed.catalog} · выплата и время подходят: ${feed.eligible} · свежая цена: ${feed.quoted} · готовы к анализу: ${feed.ready}`:"Для анализа нужен обновлённый сервер TRED.";
     const list=$("#coverage-list");list.replaceChildren();
-    for(const p of feed?.pairs||[]){list.append(node("p","",`${p.symbol} · ${Math.round(p.payout*100)}% · ${p.quote_live?"цена поступает":"нет свежей цены"} · свечей ${p.bars.join(" / ")} · ${p.reason}`));}
+    for(const p of feed?.pairs||[]){
+      const row=node("p","",`${p.symbol} · ${Math.round(p.payout*100)}% · ${p.quote_live?"цена поступает":"нет свежей цены"} · ${(p.timeframes||feed.timeframes).map((t,i)=>`M${t/60}: ${p.bars[i]}`).join(" / ")} · ${p.reason}`);
+      const d=p.history_status;
+      if(d){const labels={ohlc:"распознаны OHLC",ticks:"свечи по тикам",empty:"пустой ответ",period_missing:"в ответе нет таймфрейма",unsupported_period:"нужен поддерживаемый период свечи",format_unrecognized:"формат пока не распознан"};row.append(node("small","",`История: ${d.event} · ${d.period?"M"+d.period/60:"период не указан"} · строк ${d.rows} · распознано ${d.bars} · ${labels[d.code]||"ожидаем данные"}`));}
+      list.append(row);
+    }
     const suggestions=$(".pair-suggestions");
     if(feed?.pairs?.length){suggestions.replaceChildren();for(const p of feed.pairs.slice(0,24)){const b=node("button","",`${p.symbol} · ${Math.round(p.payout*100)}%`);b.type="button";b.dataset.symbol=p.symbol;suggestions.append(b);}}
     $("#min-payout").value=state.preferences.min_payout||85;
-    $("#signals-upgrade").hidden=state.mode!=="api"||state.signal_version===1;
+    $("#signals-upgrade").hidden=state.mode!=="api"||state.market_data_version===2;
+    const help=$("#feed-help");
+    if(feed?.blocked){
+      const b=feed.blocked;
+      help.textContent=b.history?`Ожидают историю: ${b.history}. Открой в Pocket график со свечами M1 или M2. Расширение распознаёт обычную и Fast-историю; новые полные свечи собираются из поступающих тиков.`:b.catalog?`Каталог канала недоступен: ${b.catalog}. После обновления расширения перезагрузи вкладку Pocket один раз.`:feed.ready?`Данные готовы по ${feed.ready} парам. Направление появится при подтверждённой реакции на зону; количество пар не гарантирует вход.`:"Проверь в списке выплату, доступность пары и выбранное время сделки.";
+    }
     const sessions=state.signal_sessions||[],pending=sessions.filter(s=>!s.result),container=$("#live-sessions");
     const opened=new Set([...container.querySelectorAll("details[open]")].map(d=>d.dataset.session));container.replaceChildren();
     for(const s of pending){

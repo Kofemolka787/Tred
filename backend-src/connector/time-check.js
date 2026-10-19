@@ -2,8 +2,8 @@
 // Freshness is always checked in UTC. Source decoding is explicit, never fitted
 // to arrival time. Only the opted-in Pocket Option market clock can shift.
 globalThis.TredTime = (() => {
-  const kinds=["account","asset","quote","candle","trade"];
-  const labels={account:"Баланс",asset:"Каталог пар",quote:"Котировка",candle:"Свеча",trade:"Сделка",unknown:"Неизвестное событие"};
+  const kinds=["account","asset","quote","candle","trade","feed","history_status"];
+  const labels={account:"Баланс",asset:"Каталог пар",quote:"Котировка",candle:"Свеча",trade:"Сделка",feed:"Состояние канала",history_status:"История графика",unknown:"Неизвестное событие"};
   const known=value=>kinds.includes(value)?value:"unknown";
   const profile=value=>value==="po-utc2"?"po-utc2":"utc";
   function decode(event,selected){

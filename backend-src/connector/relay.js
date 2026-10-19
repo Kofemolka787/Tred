@@ -2,7 +2,7 @@
 // Only this isolated context can reach the worker. Reinstallation replaces a
 // disposed relay in an already-open tab, without navigating the trading page.
 (()=>{
-  const VERSION="0.3.9",old=globalThis.__tredRelay;
+  const VERSION="0.3.10",old=globalThis.__tredRelay;
   if(old?.version===VERSION&&old.active){old.scan();return;}
   old?.dispose();
   let stopped=false,interval,settleTimer,pendingKey="",lastKey="",checking=false;
@@ -24,6 +24,7 @@
   function relay(event){
     if(event.source!==window||event.origin!==location.origin||event.data?.source!=="tred-observer-v1")return;
     event.stopImmediatePropagation();
+    if(event.data.observer_version!==VERSION)return;
     const events=event.data.events;
     if(!Array.isArray(events)||!events.length||events.length>250)return;
     void send({action:"events",events});

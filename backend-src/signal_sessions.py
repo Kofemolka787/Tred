@@ -1,6 +1,7 @@
 """User-confirmed observations, never broker orders or automatic settlements."""
 import json
 import math
+from market_feed import catalog_current
 
 
 SCHEMA = """
@@ -34,7 +35,7 @@ class SignalSessions:
             if db.execute("SELECT count(*) FROM signal_sessions WHERE user_id=? AND result IS NULL", (uid,)).fetchone()[0] >= 3:
                 raise DomainError("Сначала заверши одну из трёх отслеживаемых сделок.", 409)
             asset = db.execute("SELECT * FROM assets WHERE user_id=? AND symbol=?", (uid, signal["symbol"])).fetchone()
-            if not asset or asset["market"] != signal["market"] or asset["quote_time"] is None or now-asset["quote_time"] > 10 or now-asset["updated_at"] > 60 or not asset["is_open"] or asset["payout"] < signal.get("min_payout", .85) or signal["expiry"] not in json.loads(asset["expiries"]):
+            if not asset or asset["market"] != signal["market"] or asset["quote_time"] is None or now-asset["quote_time"] > 10 or not catalog_current(dict(asset),now) or not asset["is_open"] or asset["payout"] < signal.get("min_payout", .85) or signal["expiry"] not in json.loads(asset["expiries"]):
                 raise DomainError("Цена, выплата или доступность пары изменились. Запроси новый анализ.", 409)
             price = asset["price"]
             if not signal["entry_low"] <= price <= signal["entry_high"] or (price <= signal["invalidation"] if signal["direction"] == "up" else price >= signal["invalidation"]):

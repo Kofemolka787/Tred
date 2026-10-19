@@ -1,6 +1,6 @@
 "use strict";
 importScripts("time-check.js","account-check.js");
-const WORKER_VERSION="0.3.9";
+const WORKER_VERSION="0.3.10";
 const endpoint=value=>{
   const u=new URL(value);
   if(u.protocol!=="https:"||!/^[a-z0-9-]+\.trycloudflare\.com$/.test(u.hostname)||u.port||u.username||u.password||u.search||u.hash||u.pathname!=="/")throw new Error("Укажи HTTPS-адрес своего TRED-туннеля.");
@@ -17,10 +17,10 @@ async function post(base,path,body,token){
   return result;
 }
 chrome.storage.local.setAccessLevel({accessLevel:"TRUSTED_CONTEXTS"});
-const eventFields={account:["type","mode","account_id","currency","balance","time","source_stream","id_status","id_shape","source_account","account_source"],asset:["type","symbol","market","is_open","payout","expiries","time"],quote:["type","symbol","price","time","source_clock"],candle:["type","symbol","period","time","open","high","low","close","source_clock"],trade:["type","mode","account_id","id","symbol","direction","stake","opened_at","expires_at","closed_at","pnl","status","time"]};
+const eventFields={account:["type","mode","account_id","currency","balance","time","source_stream","id_status","id_shape","source_account","account_source"],asset:["type","symbol","market","is_open","payout","expiries","time","feed_id"],quote:["type","symbol","price","time","source_clock","feed_id"],candle:["type","symbol","period","time","open","high","low","close","source_clock","origin"],feed:["type","feed_id","connected","time"],history_status:["type","symbol","event","period","rows","bars","code","time"],trade:["type","mode","account_id","id","symbol","direction","stake","opened_at","expires_at","closed_at","pnl","status","time"]};
 let queue=[],sending=false,timer,generation=0;
 // Large candle histories must not delay or evict live balance/price changes.
-const priority=event=>({account:0,trade:1,asset:2,quote:3,candle:4}[event?.type]??5);
+const priority=event=>({account:0,feed:0,trade:1,asset:2,quote:3,candle:4}[event?.type]??5);
 function boundQueue(){
   if(queue.length<=5000)return;
   const urgent=queue.filter(e=>e?.type!=="candle").sort((a,b)=>priority(a)-priority(b)).slice(0,5000);
@@ -90,7 +90,7 @@ async function flush(){
         }
         // The terminal includes the current, unfinished candle in its history.
         // Never send it to research, including after UTC+2 source decoding.
-        if(kind==="candle"&&[60,300,900].includes(decoded.event.period)&&decoded.event.time+decoded.event.period>now)continue;
+        if(kind==="candle"&&[60,120,300,600,900].includes(decoded.event.period)&&decoded.event.time+decoded.event.period>now)continue;
         accepted.push(decoded.event);
         if(kind==="account")accountSources.set(TredAccount.key(decoded.event),event);
         if(decoded.source)sourceSample=decoded.source;
@@ -236,7 +236,12 @@ chrome.runtime.onMessage.addListener((message,sender,reply)=>{
         while(streamTabs.size>20)streamTabs.delete(streamTabs.keys().next().value);
         return true;
       });
-      queue.push(...events);boundQueue();schedule();return {ok:true};
+      queue.push(...events);
+      // A queued catalog must not revive its socket after close was delivered
+      // first by the priority queue. Other sockets and balances stay intact.
+      const closed=new Set(events.filter(e=>e?.type==="feed"&&e.connected===false&&typeof e.feed_id==="string").map(e=>e.feed_id));
+      if(closed.size)queue=queue.filter(e=>!["asset","quote"].includes(e?.type)||!closed.has(e.feed_id));
+      boundQueue();schedule();return {ok:true};
     }
     throw new Error("Действие недоступно.");
   })().then(reply).catch(error=>reply({error:error.message}));

@@ -1,13 +1,15 @@
 "use strict";
-// Observes INCOMING messages only. No send() call, login, cookie access or auth export.
+// Observes incoming data and the asset/period/index of history requests only.
+// Never creates broker requests or reads/copies login, cookies or auth frames.
 (() => {
-  if(window.__tredObserverVersion==="0.3.9")return;
-  window.__tredObserverVersion="0.3.9";
+  if(window.__tredObserverVersion==="0.3.10")return;
+  window.__tredObserverVersion="0.3.10";
   const Native = window.WebSocket;
+  const contexts=new WeakMap();
   const number = v => typeof v === "number" && Number.isFinite(v);
   const safeSymbol = v => typeof v === "string" && /^[A-Za-z0-9][A-Za-z0-9_./ #-]{1,31}$/.test(v);
   const ts = v => number(v) ? (v > 1e11 ? v / 1000 : v) : null;
-  const emit = events => { for(let i=0;i<events.length;i+=250) window.postMessage({source:"tred-observer-v1",events:events.slice(i,i+250)},location.origin); };
+  const emit = events => { for(let i=0;i<events.length;i+=250) window.postMessage({source:"tred-observer-v1",observer_version:"0.3.10",events:events.slice(i,i+250)},location.origin); };
   const accountId = value => (typeof value === "string" || typeof value === "number" && Number.isSafeInteger(value)) && /^\d{1,20}$/.test(String(value)) && !/^0+$/.test(String(value)) ? String(value) : null;
   const idType = value => value===undefined?"none":value===null||value===""?"empty":value===0||typeof value==="string"&&/^0+$/.test(value)?"zero":accountId(value)?typeof value==="number"?"integer":"digits":Array.isArray(value)?"array":["number","string","boolean","object"].includes(typeof value)?typeof value==="string"?"text":typeof value:"other";
   const identity = async (name,data) => {
@@ -38,6 +40,18 @@
     return {uid:null,field:opaqueUid?"opaque-uid":secondary.length>1?"ambiguous-account":null,status:secondary.length>1?"ambiguous":opaque?"unsupported":"missing",present,shape,fingerprint,sourceAccount};
   };
   const currency = value => value == null ? null : typeof value === "string" && /^[A-Za-z]{3}$/.test(value) ? value.toUpperCase() : "unsupported";
+  const historyNames=["loadHistoryPeriod","loadHistoryPeriodFast","updateHistoryNew","updateHistoryNewFast","candles","history"];
+  function tickBars(rows){
+    const ticks=rows.slice(-60000).map(r=>Array.isArray(r)&&r.length===2?{time:ts(r[0]),price:r[1]}:r&&number(r.price)?{time:ts(r.time??r.timestamp),price:r.price}:null).filter(r=>r&&number(r.time)&&number(r.price)&&r.price>0).sort((a,b)=>a.time-b.time);
+    if(!ticks.length)return [];
+    const groups=new Map();
+    for(const t of ticks){const start=Math.floor(t.time/60)*60;let b=groups.get(start);
+      if(!b){b={time:start,open:t.price,high:t.price,low:t.price,close:t.price,first:t.time,last:t.time,gap:0,count:1};groups.set(start,b);}
+      else if(t.time>b.last){b.high=Math.max(b.high,t.price);b.low=Math.min(b.low,t.price);b.close=t.price;b.gap=Math.max(b.gap,t.time-b.last);b.last=t.time;b.count++;}
+    }
+    const end=ticks.at(-1).time;
+    return [...groups.values()].filter(b=>b.time+60<=end&&b.first<=b.time+5&&b.last>=b.time+50&&b.gap<=10&&b.count>=2).slice(-1600).map(({time,open,high,low,close})=>({period:60,time,open,high,low,close,origin:"ticks"}));
+  }
   async function normalize(name, data, state) {
     const now = Date.now()/1000;
     const events = [];
@@ -65,23 +79,32 @@
     }
     if (Array.isArray(data) && (name === "updateAssets" || name === "assets")) {
       for (const row of data) {
-        if (!Array.isArray(row) || row.length < 16 || !safeSymbol(row[1]) || row[3] !== "currency" || !number(row[5]) || row[5] <= 0 || row[5] > 100 || ![0,1,false,true].includes(row[9]) || ![0,1,false,true].includes(row[14])) continue;
-        const expiries = Array.isArray(row[15]) ? row[15].filter(x => Number.isInteger(x?.time) && x.time > 0 && x.time % 60 === 0).map(x => x.time/60) : [];
-        events.push({type:"asset",symbol:row[1],market:row[9] ? "otc" : "normal",is_open:!!row[14],payout:row[5]/100,expiries,time:now});
+        if (!Array.isArray(row) || row.length < 16 || !safeSymbol(row[1]) || row[3] !== "currency" || !number(row[5]) || row[5] < 0 || row[5] > 100 || ![0,1,false,true].includes(row[9]) || ![0,1,false,true].includes(row[14])) continue;
+        const expiries = Array.isArray(row[15]) ? row[15].map(x=>typeof x?.time==="string"&&/^\d+$/.test(x.time)?Number(x.time):x?.time).filter(x=>Number.isInteger(x)&&x>0&&x%60===0).map(x=>x/60) : [];
+        events.push({type:"asset",symbol:row[1],market:row[9] ? "otc" : "normal",is_open:!!row[14],payout:row[5]/100,expiries,time:now,feed_id:state.feed});
       }
     }
     if (name === "updateStream" && Array.isArray(data)) {
-      for (const row of data) if (Array.isArray(row) && safeSymbol(row[0]) && number(row[1]) && number(row[2]) && row[2] > 0) events.push({type:"quote",symbol:row[0],time:ts(row[1]),price:row[2],source_clock:"po-market-native-v1"});
+      for (const row of data) if (Array.isArray(row) && safeSymbol(row[0]) && number(row[1]) && number(row[2]) && row[2] > 0) events.push({type:"quote",symbol:row[0],time:ts(row[1]),price:row[2],feed_id:state.feed,source_clock:"po-market-native-v1"});
     }
-    if (["loadHistoryPeriod","updateHistoryNew","candles"].includes(name) && data && safeSymbol(data.asset) && [60,300,900].includes(data.period)) {
-      const rows = data.candles || data.history || data.data;
-      if (Array.isArray(rows)) for (const row of rows.slice(-1600)) {
-        const c = Array.isArray(row) ? {time:ts(row[0]),open:row[1],close:row[2],high:row[3],low:row[4]} : {time:ts(row.time),open:row.open,close:row.close,high:row.high,low:row.low};
-        // Closed-bar filtering happens in the worker after the selected source
-        // clock is decoded. A raw UTC+2 bar must not be compared with UTC here.
-        if (Object.values(c).every(number)) events.push({type:"candle",symbol:data.asset,period:data.period,...c,source_clock:"po-market-native-v1"});
+    if (historyNames.includes(name) && data && safeSymbol(data.asset)) {
+      const request=state.requests.get(data.index);
+      const period=Number.isInteger(data.period)?data.period:request?.asset===data.asset?request.period:null;
+      const arrays=[data.candles,data.data,data.history].filter(Array.isArray);
+      const before=events.length;
+      let rowCount=0,ohlcRows=0;
+      for(const rows of arrays){
+        rowCount+=rows.length;
+        if([60,120,300,600,900].includes(period))for(const row of rows.slice(-1600)){
+          const c=Array.isArray(row)&&row.length>=5?{time:ts(row[0]),open:row[1],close:row[2],high:row[3],low:row[4]}:row&&!Array.isArray(row)?{time:ts(row.time??row.timestamp),open:row.open,close:row.close,high:row.high,low:row.low}:{};
+          if(Object.keys(c).length===5&&Object.values(c).every(number)){events.push({type:"candle",symbol:data.asset,period,...c,source_clock:"po-market-native-v1"});ohlcRows++;}
+        }
+        for(const bar of tickBars(rows))events.push({type:"candle",symbol:data.asset,...bar,source_clock:"po-market-native-v1"});
       }
+      const accepted=events.length-before;
+      events.push({type:"history_status",symbol:data.asset,event:name,period:Number.isInteger(period)&&period>0&&period<=86400?period:0,rows:Math.min(rowCount,60000),bars:Math.min(accepted,10000),code:accepted?ohlcRows?"ohlc":"ticks":!rowCount?"empty":period===null?"period_missing":![60,120,300,600,900].includes(period)?"unsupported_period":"format_unrecognized",time:now});
     }
+
     // This strict variant accepts only explicit complete trade records. Unknown
     // broker variants remain unsupported until compared with the actual terminal.
     const account = state.account;
@@ -97,14 +120,26 @@
     emit(events);
   }
   class ObservedSocket extends Native {
+    send(frame){
+      // Read only these non-auth request shapes to recover a missing response
+      // period by its matching index. All outgoing frames pass through unchanged.
+      const state=contexts.get(this);
+      if(state&&typeof frame==="string"&&frame.length<4096&&/^42\["loadHistoryPeriod",/.test(frame)){
+        try{const [,data]=JSON.parse(frame.slice(2));if(data&&safeSymbol(data.asset)&&[60,120,300,600,900].includes(data.period)&&Number.isSafeInteger(data.index)){state.requests.set(data.index,{asset:data.asset,period:data.period});while(state.requests.size>40)state.requests.delete(state.requests.keys().next().value);}}catch(_){}
+      }
+      return super.send(frame);
+    }
     constructor(...args) {
       super(...args);
       let host;
       try { host = new URL(args[0]).hostname; } catch (_) { return; }
       if (!(host === "po.market" || host.endsWith(".po.market"))) return;
       const state = {uid:null,idStatus:"missing",idField:null,idFingerprint:null,idShape:{uid:"none",accountId:"none"},currencies:{},account:null,stream:crypto.randomUUID()};
+      state.feed=crypto.randomUUID();state.requests=new Map();contexts.set(this,state);
       let pending = null;
       let queue = Promise.resolve();
+      // Keep close after messages already being decoded (including Blobs).
+      this.addEventListener("close",()=>{queue=queue.then(()=>emit([{type:"feed",feed_id:state.feed,connected:false,time:Date.now()/1000}]));return queue;});
       this.addEventListener("message", event => {
         queue = queue.then(async () => {
           let frame = event.data;
@@ -118,7 +153,7 @@
               await normalize(name,binary,state);
             } else if (frame.startsWith("451-")) {
               const parsed = JSON.parse(frame.slice(4));
-              const allowed = ["successauth","successupdateBalance","balance","updateAssets","assets","updateStream","loadHistoryPeriod","updateHistoryNew","candles","successopenOrder","successcloseOrder","updateOpenedDeals","updateClosedDeals"];
+              const allowed = ["successauth","successupdateBalance","balance","updateAssets","assets","updateStream","loadHistoryPeriod","loadHistoryPeriodFast","updateHistoryNew","updateHistoryNewFast","candles","history","successopenOrder","successcloseOrder","updateOpenedDeals","updateClosedDeals"];
               pending = allowed.includes(parsed[0]) ? parsed[0] : "unsupported";
             } else if (frame.startsWith("42")) {
               const parsed = JSON.parse(frame.slice(2));

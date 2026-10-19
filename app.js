@@ -200,16 +200,17 @@ $("#open-pocket").addEventListener("click", () => {
 $("#request-signal").addEventListener("click", async () => {
   if (!authorized || busy) return;
   if (current.mode === "device") { $("#connect-dialog").showModal(); return; }
-  if(current.signal_version!==1){notify("Обнови сервер до 0.3.14 — инструкция в кабинете.");return;}
+  if(current.market_data_version!==2){notify("Обнови сервер до 0.3.15 — инструкция в кабинете.");return;}
   setBusy(true);
   try {
+    text("#request-signal strong","ПРОВЕРЯЕМ ДАННЫЕ…");
     const result = await api("/api/signal", {});
     current = result.state;
     render();
     window.TredSignals.show(result);
     $("#signal-result").scrollIntoView({block:"start",behavior:"smooth"});
   } catch (error) { notify(error.message || "Не удалось выполнить запрос."); }
-  finally { setBusy(false); }
+  finally { setBusy(false);text("#request-signal strong","ПОЛУЧИТЬ СИГНАЛ"); }
 });
 async function bootstrap() {
   try {
