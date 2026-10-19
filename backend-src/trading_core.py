@@ -28,8 +28,10 @@ def money(value, *, positive=False):
         raise DomainError("Сумма должна быть числом с точностью до цента.")
     try:
         number = Decimal(str(value))
+        if not number.is_finite() or abs(number) > 10000000:
+            raise InvalidOperation()
         cents = number * 100
-        if not number.is_finite() or abs(number) > 10000000 or cents != cents.to_integral_value():
+        if cents != cents.to_integral_value():
             raise InvalidOperation()
         result = int(cents)
         if positive and result <= 0:
