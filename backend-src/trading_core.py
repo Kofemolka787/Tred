@@ -4,7 +4,7 @@ No Pocket Option credential storage, order placement, or withdrawal code exists.
 Money is represented by integer cents; risk reservations include all open stakes.
 """
 from contextlib import contextmanager
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, DecimalException, InvalidOperation
 import hashlib
 import json
 import math
@@ -28,16 +28,16 @@ def money(value, *, positive=False):
         raise DomainError("Сумма должна быть числом с точностью до цента.")
     try:
         number = Decimal(str(value))
-        if not number.is_finite() or abs(number) > 10000000:
+        if not number.is_finite() or number.copy_abs() > 10000000:
             raise InvalidOperation()
-        cents = number * 100
-        if cents != cents.to_integral_value():
+        rounded = number.quantize(Decimal("0.01"))
+        if rounded != number:
             raise InvalidOperation()
-        result = int(cents)
+        result = int(rounded * 100)
         if positive and result <= 0:
             raise InvalidOperation()
         return result
-    except (InvalidOperation, ValueError, OverflowError):
+    except (DecimalException, ValueError, OverflowError):
         raise DomainError("Проверь сумму: максимум два знака после запятой.") from None
 
 

@@ -36,7 +36,7 @@ class LedgerTests(unittest.TestCase):
     def test_money_rejects_nonfinite_boolean_fractional_cents_and_negative_positive(self):
         self.assertEqual(money("12.34"),1234)
         self.assertEqual(money("0.10"),10)
-        for value in (True,"nan","inf","1e999999999999","1.001",{},None):
+        for value in (True,"nan","inf","1e999999999999","1e-999999999999","1.001",{},None):
             with self.assertRaises(DomainError): money(value)
         with self.assertRaises(DomainError): money("-1",positive=True)
 
