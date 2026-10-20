@@ -35,6 +35,8 @@ def gate(asset, *, expiry, min_payout, now):
         code, reason = "payout", f"Выплата {round(asset['payout']*100)}% ниже минимума {round(min_payout*100)}%."
     elif expiry not in asset["expiries"]:
         code, reason = "expiry", f"Брокер не подтвердил сделку на {expiry} мин."
+    elif asset.get("catalog_feed") and asset.get("feed_connected") and asset.get("quote_feed") in (None, asset["catalog_feed"]) and not live:
+        code, reason = "quote", "История и каталог могут поступать отдельно от цен. Ждём свежую котировку этого канала."
     elif not catalog_current(asset, now):
         code, reason = "catalog", "Нет действующего каталога этого канала. Обнови вкладку Pocket Option; старый модуль не передаёт состояние канала."
     elif not live:
@@ -44,6 +46,7 @@ def gate(asset, *, expiry, min_payout, now):
     # Eligible reflects metadata only; current-socket validity needs its ticks.
     eligible = bool(asset["is_open"] and asset["payout"] >= min_payout and expiry in asset["expiries"] and catalog_current(asset, now))
     return {"code": code, "reason": reason, "eligible": eligible, "quote_live": live,
+            "metadata_eligible": bool(asset["is_open"] and asset["payout"] >= min_payout and expiry in asset["expiries"]),
             "catalog_age": max(0, round(now-asset["updated_at"])),
             "catalog_source": "live_socket" if asset.get("catalog_feed") else "legacy_snapshot"}
 

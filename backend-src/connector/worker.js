@@ -1,6 +1,6 @@
 "use strict";
 importScripts("time-check.js","account-check.js","scan-worker.js");
-const WORKER_VERSION="0.3.11";
+const WORKER_VERSION="0.3.12";
 const endpoint=value=>{
   const u=new URL(value);
   if(u.protocol!=="https:"||!/^[a-z0-9-]+\.trycloudflare\.com$/.test(u.hostname)||u.port||u.username||u.password||u.search||u.hash||u.pathname!=="/")throw new Error("Укажи HTTPS-адрес своего TRED-туннеля.");
@@ -23,9 +23,24 @@ let queue=[],sending=false,timer,generation=0;
 const priority=event=>({account:0,feed:0,trade:1,asset:2,quote:3,candle:4}[event?.type]??5);
 function boundQueue(){
   if(queue.length<=5000)return;
-  const urgent=queue.filter(e=>e?.type!=="candle").sort((a,b)=>priority(a)-priority(b)).slice(0,5000);
+  const critical=queue.filter(e=>priority(e)<3).sort((a,b)=>priority(a)-priority(b)).slice(0,5000);
+  const quoteRoom=5000-critical.length;
+  const quotes=quoteRoom?queue.filter(e=>e?.type==="quote").slice(-quoteRoom):[];
+  const urgent=critical.concat(quotes);
   const room=5000-urgent.length;
-  queue=urgent.concat(room?queue.filter(e=>e?.type==="candle").slice(-room):[]);
+  queue=urgent.concat(room?queue.filter(e=>priority(e)>=4).slice(-room):[]);
+}
+function latestQuotes(events,profile){
+  const other=[],latest=new Map(),now=Date.now()/1000;
+  for(const event of events){
+    if(event?.type!=="quote"||!Object.keys(event).every(k=>eventFields.quote.includes(k))||typeof event.price!=="number"||!Number.isFinite(event.price)||event.price<=0){other.push(event);continue;}
+    const decoded=TredTime.decode(event,profile);
+    if(decoded.error||TredTime.problem(decoded.event,now)){other.push(event);continue;}
+    const key=(event.feed_id||"")+":"+event.symbol;
+    const previous=latest.get(key);
+    if(!previous||previous.time<event.time)latest.set(key,event);
+  }
+  return other.concat([...latest.values()]); // Original source times are kept.
 }
 // Pending balance is usable for <=60 seconds, in RAM, at its ORIGINAL time.
 // It may be delivered once after an explicit identity confirmation, never aged
@@ -50,6 +65,7 @@ async function flush(){
     const stored=await chrome.storage.local.get(["base","token","needsPairing","timeWarnings","receivedKinds","marketClock","clockSamples","accountCandidate","confirmedUsdAccounts","identityCandidate","manualIdentities","accountProfiles","lastBalance"]);
     const {base,token}=stored;
     if(!base||!token||stored.needsPairing){queue=[];return;}
+    queue=latestQuotes(queue,stored.marketClock);
     queue.sort((a,b)=>priority(a)-priority(b));
     const batch=queue.splice(0,250),groups=new Map();
     for(const event of batch){

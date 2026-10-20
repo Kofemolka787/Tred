@@ -215,7 +215,7 @@ def coverage(assets, histories, *, market, expiry, min_payout, now):
         selected,bars,checks=frame_data(histories,asset["symbol"],expiry,now)
         status=gate(asset,expiry=expiry,min_payout=min_payout,now=now)
         quote_live,eligible=status["quote_live"],status["eligible"]
-        rows.append({"symbol": asset["symbol"], "payout": asset["payout"], "eligible": eligible,
+        rows.append({"symbol": asset["symbol"], "payout": asset["payout"], "eligible": eligible, "metadata_eligible":status["metadata_eligible"],
                      "quote_live": quote_live, "price": asset.get("price"), "quote_time": asset.get("quote_time"), "timeframes":list(selected), "tick_bars":[sum(r.get("origin")=="ticks" for r in rows) for rows in bars], "bars": [len(r) for r in bars],
                      "history_ready": all(a.get("history_ready") for a in checks),
                      "stage": status["code"] if status["code"]!="ready" else "history" if not all(a.get("history_ready") for a in checks) else "structure",
@@ -223,6 +223,6 @@ def coverage(assets, histories, *, market, expiry, min_payout, now):
                      "history_status":json.loads(asset["history_status"]) if asset.get("history_status") else None,
                      "reason":status["reason"] if status["code"]!="ready" else next((a["reason"] for a in checks if not a.get("context_ready")), "Данные для анализа получены.")})
     stages={name:sum(r["stage"]==name for r in rows) for name in ("closed","payout","expiry","catalog","quote","history","structure")}
-    return {"blocked":stages,"catalog": len(rows), "eligible": sum(r["eligible"] for r in rows), "quoted": sum(r["quote_live"] for r in rows),
+    return {"blocked":stages,"catalog": len(rows), "eligible": sum(r["eligible"] for r in rows), "metadata_eligible":sum(r["metadata_eligible"] for r in rows), "quoted": sum(r["quote_live"] for r in rows),
             "ready": sum(r["eligible"] and r["quote_live"] and r["history_ready"] for r in rows),
             "timeframes": list(periods), "pairs": sorted(rows, key=lambda r: (-r["eligible"], -r["quote_live"], -r["payout"], r["symbol"]))}

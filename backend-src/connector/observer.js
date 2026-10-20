@@ -2,14 +2,14 @@
 // Observes data and connects the bounded read-only market scanner to the
 // existing socket. Login, cookies and outgoing auth frames are never copied.
 (() => {
-  if(window.__tredObserverVersion==="0.3.11")return;
-  window.__tredObserverVersion="0.3.11";
+  if(window.__tredObserverVersion==="0.3.12")return;
+  window.__tredObserverVersion="0.3.12";
   const Native = window.WebSocket;
   const contexts=new WeakMap();
   const number = v => typeof v === "number" && Number.isFinite(v);
   const safeSymbol = v => typeof v === "string" && /^[A-Za-z0-9][A-Za-z0-9_./ #-]{1,31}$/.test(v);
   const ts = v => number(v) ? (v > 1e11 ? v / 1000 : v) : null;
-  const emit = events => { for(let i=0;i<events.length;i+=250) window.postMessage({source:"tred-observer-v1",observer_version:"0.3.11",events:events.slice(i,i+250)},location.origin); };
+  const emit = events => { for(let i=0;i<events.length;i+=250) window.postMessage({source:"tred-observer-v1",observer_version:"0.3.12",events:events.slice(i,i+250)},location.origin); };
   const accountId = value => (typeof value === "string" || typeof value === "number" && Number.isSafeInteger(value)) && /^\d{1,20}$/.test(String(value)) && !/^0+$/.test(String(value)) ? String(value) : null;
   const idType = value => value===undefined?"none":value===null||value===""?"empty":value===0||typeof value==="string"&&/^0+$/.test(value)?"zero":accountId(value)?typeof value==="number"?"integer":"digits":Array.isArray(value)?"array":["number","string","boolean","object"].includes(typeof value)?typeof value==="string"?"text":typeof value:"other";
   const identity = async (name,data) => {
@@ -108,7 +108,7 @@
       const ticks=arrays.flatMap(rows=>rows.slice(-60000).map(r=>Array.isArray(r)&&r.length===2?{time:ts(r[0]),price:r[1]}:r&&number(r.price)?{time:ts(r.time??r.timestamp),price:r.price}:null)).filter(r=>r&&number(r.time)&&number(r.price)&&r.price>0);
       if(ticks.length){const last=ticks.reduce((a,b)=>a.time>b.time?a:b);events.push({type:"quote",symbol:data.asset,...last,feed_id:state.feed,source_clock:"po-market-native-v1"});}
       window.__tredMarketScanner?.received(state,data,period);
-      events.push({type:"history_status",symbol:data.asset,event:name,period:Number.isInteger(period)&&period>0&&period<=86400?period:0,rows:Math.min(rowCount,60000),bars:Math.min(accepted,10000),code:accepted?ohlcRows?"ohlc":"ticks":!rowCount?"empty":period===null?"period_missing":![60,120,300,600,900].includes(period)?"unsupported_period":"format_unrecognized",time:now});
+      if(period!==1)events.push({type:"history_status",symbol:data.asset,event:name,period:Number.isInteger(period)&&period>0&&period<=86400?period:0,rows:Math.min(rowCount,60000),bars:Math.min(accepted,10000),code:accepted?ohlcRows?"ohlc":"ticks":!rowCount?"empty":period===null?"period_missing":![60,120,300,600,900].includes(period)?"unsupported_period":"format_unrecognized",time:now});
     }
 
     // This strict variant accepts only explicit complete trade records. Unknown
@@ -123,6 +123,7 @@
         events.push({type:"trade",mode:account.mode,account_id:account.account_id,id:String(r.id),symbol:r.asset,direction:r.action === "call" ? "up" : "down",stake:String(r.amount),opened_at:ts(r.openTime),expires_at:ts(r.closeTime),status:closed ? r.profit > 0 ? "win" : r.profit < 0 ? "loss" : "draw" : "open",...(closed ? {closed_at:ts(r.closedAt),pnl:String(r.profit)} : {}),time:now});
       }
     }
+    for(const event of events)if(event.type==="quote")window.__tredMarketScanner?.quoted(state,event.symbol,event.time);
     emit(events);
   }
   class ObservedSocket extends Native {
@@ -153,6 +154,9 @@
           if (frame instanceof Blob) frame = await frame.text();
           else if (frame instanceof ArrayBuffer) frame = new TextDecoder().decode(frame);
           if (typeof frame !== "string" || frame.length > 4000000) return;
+          // Engine.IO control frames can arrive between an attachment header
+          // and its binary payload; they must not consume that pending event.
+          if(["2","3","40","41"].includes(frame))return;
           try {
             if (pending) {
               const binary = JSON.parse(frame);
@@ -170,7 +174,11 @@
               if (parsed && Object.hasOwn(parsed,"balance")) await normalize("balance",parsed,state);
             } else if (frame.startsWith("[")) {
               const parsed = JSON.parse(frame);
-              if (Array.isArray(parsed) && Array.isArray(parsed[0])) await normalize("assets",parsed,state);
+              if (Array.isArray(parsed) && safeSymbol(parsed[0]) && number(parsed[1]) && number(parsed[2])) await normalize("updateStream",[parsed],state);
+              else if (Array.isArray(parsed) && Array.isArray(parsed[0])) {
+                const first=parsed[0];
+                await normalize(safeSymbol(first[0])&&number(first[1])&&number(first[2])?"updateStream":"assets",parsed,state);
+              }
             }
           } catch (_) { pending = null; }
         }).catch(() => { pending = null; });

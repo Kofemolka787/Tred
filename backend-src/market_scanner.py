@@ -64,7 +64,8 @@ class MarketScanner:
                     complete = len(tail) >= 80 and all(b["time"] - x["time"] == period for x, b in zip(tail, tail[1:]))
                     if not complete or not data or data[-1]["time"] < closed:
                         needed.append({"period": period, "bars": 160 if not complete else 5})
-                rows.append({"symbol": a["symbol"], "feed_id": a["catalog_feed"], "history": needed})
+                quoted = a.get("quote_time") is not None and now-a["quote_time"] <= 8 and a.get("quote_feed") == a["catalog_feed"]
+                rows.append({"symbol": a["symbol"], "feed_id": a["catalog_feed"], "history": needed, "quote": not quoted})
             return {"ok": True, "plan": {"version": 1, "until": now + 15, "pairs": rows, "total": len(candidates)}}
 
     def _scan_progress(self, db, uid, prefs, assets, histories, now):
@@ -119,8 +120,9 @@ class MarketScanner:
             progress = self._scan_progress(db, uid, prefs, assets, histories, now)
             risk = self._risk(db, uid)
             if not risk["locked"] and not self.ai.get(job["id"]) and now < job["deadline"] and (not progress["total"] or progress["checked"] < progress["total"]):
-                return {"status": "loading", "scan_id": job["id"], "deadline": job["deadline"], "progress": progress,
-                        "reason": "Расширение автоматически запрашивает историю и котировки доступных пар. Для анализа нужны 80 закрытых свечей на двух таймфреймах. Оставь Pocket Option и сервер открытыми."}
+                missing_quotes = progress["history_ready"] > 0 and not progress["quoted"]
+                return {"status": "loading", "phase": "quotes" if missing_quotes else "history", "scan_id": job["id"], "deadline": job["deadline"], "progress": progress,
+                        "reason": "История уже поступает, но свежих цен пока нет. Расширение повторяет подписки и запрашивает последние тики. Оставь Pocket Option и сервер открытыми." if missing_quotes else "Расширение автоматически запрашивает историю и котировки доступных пар. Для анализа нужны 80 закрытых свечей на двух таймфреймах. Оставь Pocket Option и сервер открытыми."}
             if risk["locked"]:
                 result = {"status": "skipped", "reason": risk["reason"]}
             elif progress["checked"] or self.ai.get(job["id"]):

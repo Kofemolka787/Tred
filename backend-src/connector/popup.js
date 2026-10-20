@@ -3,7 +3,7 @@ const $=s=>document.querySelector(s);
 let editing=false,hydrated=false,pairing=false,changingClock=false,marketClock="utc",accountTarget=null,confirmingCurrency=false;
 let identityTarget=null,identityFormKey=null,confirmingIdentity=false;
 let activeTabId=null;
-const UI_VERSION="0.3.11";
+const UI_VERSION="0.3.12";
 const labels={account:"баланс",asset:"каталог пар",quote:"котировки",candle:"свечи",trade:"сделки",feed:"состояние канала",history_status:"диагностика истории"};
 function outdated(){
   $("#connection").textContent="Окно обновилось, а фоновый модуль ещё работает в другой версии. Нажми «Перезапустить модуль», затем открой TRED снова.";

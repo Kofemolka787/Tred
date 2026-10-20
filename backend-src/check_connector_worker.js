@@ -29,7 +29,7 @@ async function checks(){
   assert.equal(h.requests[2].body.events[0].time,now,"No timestamp rewriting");
   let status=await h.message({action:"status"});
   assert(status.paired&&!status.needsPairing&&status.lastSeen);
-  assert.equal(status.worker_version,"0.3.11");
+  assert.equal(status.worker_version,"0.3.12");
   assert.match(status.diagnostic,/quote|Котировка/);assert.match(status.diagnostic,/30 с/);
   assert(!JSON.stringify(status).includes(token));
   assert(!JSON.stringify(h.storage).includes('"balance"'));
@@ -298,7 +298,14 @@ async function checks(){
   await closing.message({action:"events",events:[account,{...quote,feed_id:"22222222-2222-4222-8222-222222222222"},{type:"feed",feed_id:feed,connected:false,time:now}]},sender);
   await vm.runInContext("flush()",closing.context);
   assert.deepEqual(closing.requests.flatMap(r=>r.body.events).map(e=>e.type),["account","quote","feed"],"Queued catalogs from a closed socket cannot revive its availability; another socket and balance remain");
-  console.log(JSON.stringify({ok:true,live_data_prioritized_over_large_histories:true,worker_scenarios:53,closed_feed_cancels_pending_catalog:true,utc_timestamps_unchanged:true,bad_quote_does_not_block_account:true,failed_claim_preserves_binding:true,status_excludes_token:true,unknown_credential_fields_not_sent:true,late_response_after_disconnect_ignored:true,html_and_missing_token_keep_binding:true,explicit_po_utc2_profile:true,stale_and_future_still_rejected:true,closed_candles_decoded_before_filter:true,source_time_provenance_retained:true,no_arrival_time_calibration:true,usd_requires_confirmation_when_missing:true,confirmation_scoped_to_account_and_mode:true,explicit_other_currency_cannot_be_overridden:true,currency_confirmation_does_not_replay_balance:true,manual_profile_scoped_to_mode_and_known_source:true,fresh_pending_balance_keeps_original_time:true,pending_balance_not_persisted:true,broker_identity_not_overridden:true,unknown_id_requires_explicit_scoped_confirmation:true,schema_diagnostics_exclude_raw_ids:true,zero_id_rejected:true,balance_changes_without_reconfirmation:true,profile_survives_reconnect_and_restart:true,legacy_confirmation_migrated:true,different_source_requires_confirmation:true,delivery_retry_without_freshening:true,synchronous_context_invalidation_handled:true,collector_restored_without_page_reload:true,visible_balance_uses_configured_account:true}));
+  const burst=harness();
+  const ticks=Array.from({length:6000},(_,i)=>({...quote,time:now-30+i*.005,price:1.1+i*.00001}));
+  for(let i=0;i<ticks.length;i+=250)await burst.message({action:'events',events:ticks.slice(i,i+250)},sender);
+  await vm.runInContext('flush()',burst.context);
+  const burstDelivered=burst.requests.flatMap(r=>r.body.events).filter(e=>e.type==='quote');
+  assert.equal(burstDelivered.length,1,'A quote burst delivers the latest actual sample rather than an old backlog');
+  assert.equal(burstDelivered[0].time,ticks.at(-1).time);assert.equal(burstDelivered[0].price,ticks.at(-1).price);
+  console.log(JSON.stringify({ok:true,live_data_prioritized_over_large_histories:true,worker_scenarios:54,closed_feed_cancels_pending_catalog:true,utc_timestamps_unchanged:true,bad_quote_does_not_block_account:true,failed_claim_preserves_binding:true,status_excludes_token:true,unknown_credential_fields_not_sent:true,late_response_after_disconnect_ignored:true,html_and_missing_token_keep_binding:true,explicit_po_utc2_profile:true,stale_and_future_still_rejected:true,closed_candles_decoded_before_filter:true,source_time_provenance_retained:true,no_arrival_time_calibration:true,usd_requires_confirmation_when_missing:true,confirmation_scoped_to_account_and_mode:true,explicit_other_currency_cannot_be_overridden:true,currency_confirmation_does_not_replay_balance:true,manual_profile_scoped_to_mode_and_known_source:true,fresh_pending_balance_keeps_original_time:true,pending_balance_not_persisted:true,broker_identity_not_overridden:true,unknown_id_requires_explicit_scoped_confirmation:true,schema_diagnostics_exclude_raw_ids:true,zero_id_rejected:true,balance_changes_without_reconfirmation:true,profile_survives_reconnect_and_restart:true,legacy_confirmation_migrated:true,different_source_requires_confirmation:true,delivery_retry_without_freshening:true,synchronous_context_invalidation_handled:true,collector_restored_without_page_reload:true,visible_balance_uses_configured_account:true}));
 }
 async function realHttp(){
   const api=process.argv[process.argv.indexOf("--api")+1],fixtureToken=process.argv[process.argv.indexOf("--fixture-token")+1];

@@ -64,7 +64,7 @@ window.TredSignals=(()=>{
     chosen=result.status==="candidate"?result:null;
     const host=$("#signal-result");host.replaceChildren();host.hidden=false;
     if(!chosen){
-      const title=result.status==="loading"?(result.phase==="ai"?"ИИ анализирует рынок":"Загружаем данные всех пар"):result.status==="setup_required"?"Подключи ИИ один раз":result.status==="ai_unavailable"?"ИИ пока недоступен":result.status==="cancelled"?"Проверка остановлена":result.waiting_data?"Не хватает данных для анализа":"ИИ не подтвердил вход";
+      const title=result.status==="loading"?(result.phase==="ai"?"ИИ анализирует рынок":result.phase==="quotes"?"Получаем текущие цены":"Загружаем данные всех пар"):result.status==="setup_required"?"Подключи ИИ один раз":result.status==="ai_unavailable"?"ИИ пока недоступен":result.status==="cancelled"?"Проверка остановлена":result.waiting_data?"Не хватает данных для анализа":"ИИ не подтвердил вход";
       host.append(node("h3","",title),node("p","",result.reason||"Ждём подтверждённые условия."));
       if(result.progress)host.append(node("p","",`Пары: ${result.progress.checked} / ${result.progress.total} с полными данными · история: ${result.progress.history_ready} · свежие котировки: ${result.progress.quoted}`));
       if(result.status==="loading"){const b=node("button","primary-small","Остановить проверку");b.id="cancel-scan";b.type="button";host.append(b);}
@@ -96,7 +96,8 @@ window.TredSignals=(()=>{
     const prefs=state.preferences;
     if(chosen&&(chosen.expiry!==prefs.expiry||chosen.market!==prefs.market||chosen.payout<(prefs.min_payout||85)/100||!(state.recent_requests||[]).some(r=>r.analysis_id===chosen.analysis_id&&r.valid_until===chosen.valid_until))){chosen=null;$("#signal-result").hidden=true;}
     const feed=state.feed;
-    $("#feed-coverage").textContent=feed?`Каталог: ${feed.catalog} · выплата и время подходят: ${feed.eligible} · свежая цена: ${feed.quoted} · готовы к анализу: ${feed.ready}`:"Для анализа нужен обновлённый сервер TRED.";
+    const metadata=feed?.metadata_eligible??feed?.pairs?.filter(p=>!["closed","payout","expiry"].includes(p.stage)).length??feed?.eligible;
+    $("#feed-coverage").textContent=feed?`Каталог: ${feed.catalog} · выплата и время подходят: ${metadata} · свежая цена: ${feed.quoted} · готовы к анализу: ${feed.ready}`:"Для анализа нужен обновлённый сервер TRED.";
     const list=$("#coverage-list");list.replaceChildren();
     for(const p of feed?.pairs||[]){
       const row=node("p","",`${p.symbol} · ${Math.round(p.payout*100)}% · ${p.quote_live?"цена поступает":"нет свежей цены"} · ${(p.timeframes||feed.timeframes).map((t,i)=>`M${t/60}: ${p.bars[i]}`).join(" / ")} · ${p.reason}`);

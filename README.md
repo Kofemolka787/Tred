@@ -1,12 +1,14 @@
 # TRED Mini App
 
-TRED v0.3.18 for @Tr1edBot_bot. Open https://kofemolka787.github.io/Tred/ from Telegram.
+TRED v0.3.19 for @Tr1edBot_bot. Open https://kofemolka787.github.io/Tred/ from Telegram.
 
-[Setup and update in Russian](backend-src/CONNECT-RU.md) · [Backend source](backend-src/) · [Download 0.3.18](https://kofemolka787.github.io/Tred/tred-backend-v0.3.18.zip)
+[Setup and update in Russian](backend-src/CONNECT-RU.md) · [Backend source](backend-src/) · [Download 0.3.19](https://kofemolka787.github.io/Tred/tred-backend-v0.3.19.zip)
 
 Read-only demo/real Pocket balances, Telegram-scoped connection discovery, and LunaRoute or direct OpenAI review of price structure/Smart Money evidence for 5/10/15-minute scenarios. Catalog and pair selection show all received instruments, including non-currency categories, without the former 24/100-row truncation. Only open instruments meeting payout/expiry filters are analyzed (prefer 92%, floor 85%).
 
 The connector automatically requests quotes and history for matching catalog instruments through the already-open native socket. Only subfor/loadHistoryPeriod market-data requests are generated; no orders, login frames, credentials or chart-switch commands. Requests are paced, history concurrency is bounded, failures do not starve the rest of the catalog. The UI shows data coverage and waits for collection before AI review. Unknown/missing data is visible, never invented. Native broker protocol compatibility must be verified after installation.
+
+Connector 0.3.12 retries silent quote subscriptions, recovers timestamped ticks through bounded period-1 history requests, and preserves the latest actual price per instrument during history backlogs. No OHLC close or arrival time becomes a fresh quote. Metadata coverage and current-price coverage are shown separately. The connector also works with a running 0.3.18 server, so an already-configured owner can overlay the complete package into the loaded extension folder, reload that same extension and refresh Pocket once without restarting the server or changing the tunnel. See the guide for exact paths and integrity requirements. Native broker compatibility still requires owner validation.
 
 The real Responses API client sends only market evidence, closed OHLC samples and computed causal SMC/structure facts, with store:false and structured output validation. Every received eligible pair enters the review, with bounded batches and winner comparison for large catalogs. The selected model chooses or declines an entry, within locally verified directions/entry conditions; timestamps and prices are checked again after the response. No forced signals, measured win probability or profitability claims. OTC patterns do not establish exchange order flow or actual liquidity. Longer expiry does not guarantee accuracy.
 

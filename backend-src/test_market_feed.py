@@ -107,4 +107,19 @@ class MarketFeedTests(unittest.TestCase):
             with self.assertRaises(DomainError):self.ingest({**status,**extra})
 
 
+    def test_metadata_count_is_separate_from_prices_and_stale_quotes_do_not_qualify(self):
+        self.now+=11
+        feed=self.state()['feed']
+        self.assertEqual(feed['metadata_eligible'],1)
+        self.assertEqual(feed['eligible'],0)
+        self.assertEqual(feed['quoted'],0)
+        self.assertEqual(feed['ready'],0)
+        self.assertEqual(feed['pairs'][0]['stage'],'quote')
+        self.assertIn('свежую котировку',feed['pairs'][0]['reason'])
+        plan=self.ledger.bridge_plan(self.token,{'code':'ready'})['plan']
+        self.assertTrue(plan['pairs'][0]['quote'])
+        self.ingest(self.quote())
+        self.assertFalse(self.ledger.bridge_plan(self.token,{'code':'ready'})['plan']['pairs'][0]['quote'])
+
+
 if __name__=='__main__':unittest.main()

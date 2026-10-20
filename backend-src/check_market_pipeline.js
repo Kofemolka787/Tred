@@ -7,13 +7,20 @@ const h=harness((url,options)=>fetch(url.replace(base,api),options),{token,marke
 h.advance(Number(stamp)-now);
 let pending=[],socket,forwarded=0,outgoing=[],timers=[],responses=[],fixtures={};
 const automatic=process.argv.includes("--auto-fixture");
+const probesOnly=process.argv.includes("--quote-probe-fixture");
 class Socket {
  constructor(){this.handlers={};this.readyState=1;this.subscribed=new Set();}
  addEventListener(name,fn){this.handlers[name]=fn;}
  send(frame){outgoing.push(frame);
   if(automatic&&frame.startsWith('42')){const [name,value]=JSON.parse(frame.slice(2));
    if(!['subfor','loadHistoryPeriod'].includes(name))throw Error('Forbidden generated broker request');
-   if(name==='subfor'){this.subscribed.add(value);responses.push(this.emit('42'+JSON.stringify(['updateStream',[[value,h.context.Date.now()/1000+7200,106.30]]])));}
+   if(name==='subfor'&&!probesOnly){this.subscribed.add(value);responses.push(this.emit('42'+JSON.stringify(['updateStream',[[value,h.context.Date.now()/1000+7200,106.30]]])));}
+   if(name==='loadHistoryPeriod'&&value.period===1){
+    const at=h.context.Date.now()/1000+7200;
+    responses.push(this.emit('451-["loadHistoryPeriodFast",{"_placeholder":true,"num":0}]'));
+    responses.push(this.emit('2'));
+    responses.push(this.emit(new TextEncoder().encode(JSON.stringify({asset:value.asset,index:value.index,period:1,history:[[at-1,106.29],[at,106.30]]})).buffer));
+   }
    if(name==='loadHistoryPeriod'&&fixtures[value.asset]?.[value.period]){
     responses.push(this.emit('451-["loadHistoryPeriodFast",{"_placeholder":true,"num":0}]'));
     responses.push(this.emit(new TextEncoder().encode(JSON.stringify({asset:value.asset,index:value.index,period:value.period,data:fixtures[value.asset][value.period]})).buffer));

@@ -136,7 +136,8 @@ function renderAccount() {
     detail.textContent = a.id ? `ID ${a.id} · последнее обновление ${new Date(a.updated_at*1000).toLocaleTimeString()}` : linked || quotes ? "Баланс и ID счёта ещё не получены от Pocket Option. Проверь статус счёта в расширении TRED." : "Подключи сервер и модуль Pocket Option.";
     card.append(label,balance,detail); list.append(card);
   });
-  text("#analysis-caption",current.connection.live ? `Анализ · доступных пар ${current.catalog?.verified_count || 0}` : "Анализ: ждём подключение данных");
+  const feed=current.feed,metadata=feed?.metadata_eligible??feed?.pairs?.filter(p=>!["closed","payout","expiry"].includes(p.stage)).length??feed?.eligible;
+  text("#analysis-caption",feed?`Анализ · по каталогу подходят ${metadata} · со свежей ценой ${feed.quoted}`:"Анализ: ждём подключение данных");
 }
 function fillTrades(selector,trades,paper=false) {
   const list = $(selector); list.replaceChildren();
@@ -201,7 +202,7 @@ $("#open-pocket").addEventListener("click", () => {
 $("#request-signal").addEventListener("click", async () => {
   if (!authorized || busy) return;
   if (current.mode === "device") { $("#connect-dialog").showModal(); return; }
-  if(current.market_data_version!==3){notify("Обнови сервер до 0.3.18 — инструкция в кабинете.");return;}
+  if(current.market_data_version!==3){notify("Обнови сервер до 0.3.19 — инструкция в кабинете.");return;}
   const ticket={cancelled:false,client:dataClient,generation:connectGeneration,id:null};activeScan=ticket;
   setBusy(true);
   try {

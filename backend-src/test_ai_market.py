@@ -182,4 +182,16 @@ class AIMarketTests(unittest.TestCase):
                 self.assertNotIn('fixture-openai-key-for-error-check', json.dumps(result))
 
 
+    def test_received_history_without_current_quotes_reports_quote_stage_and_does_not_call_ai(self):
+        self.history();self.now+=11
+        result=self.ledger.start_scan(101)
+        self.assertEqual(result['phase'],'quotes')
+        self.assertEqual(result['progress']['history_ready'],1)
+        self.assertEqual(result['progress']['quoted'],0)
+        self.assertEqual(self.ai.calls,0)
+        self.ingest(self.quote())
+        result=self.ledger.poll_scan(101,{'scan_id':result['scan_id']})
+        self.assertEqual(result['status'],'candidate')
+
+
 if __name__ == '__main__': unittest.main()

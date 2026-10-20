@@ -139,6 +139,14 @@ setImmediate(async()=>{
   await fast.emit('42'+JSON.stringify(["updateHistoryNewFast",{asset:"EURUSD",history:ticks.filter((_,i)=>![4,5].includes(i))}]));
   assert.equal(forwarded.flatMap(x=>x.events).filter(e=>e.type==="candle").length,1,"A missing 15-second interval cannot become a closed candle");
   forwarded=[];
+  await fast.emit('451-["updateStream",{"_placeholder":true,"num":0}]');
+  await fast.emit('2');
+  await fast.emit(new TextEncoder().encode(JSON.stringify([["EURUSD",Date.now()/1000,1.21]])).buffer);
+  await fast.emit(JSON.stringify([["EURUSD",Date.now()/1000,1.22]]));
+  await fast.emit(JSON.stringify(["EURUSD",Date.now()/1000,1.23]));
+  const live=forwarded.flatMap(x=>x.events).filter(e=>e.type==='quote');
+  assert.deepEqual(live.map(e=>e.price),[1.21,1.22,1.23],'Control frames and bare timestamped tick arrays preserve actual quotes');
+  forwarded=[];
   const row=Array(16).fill(null);row[1]="EURUSD";row[3]="currency";row[5]=92;row[9]=0;row[14]=true;row[15]=[{time:300}];
   await fast.emit('42'+JSON.stringify(["updateAssets",[row]]));
   await fast.emit('42'+JSON.stringify(["updateStream",[["EURUSD",Date.now()/1000,1.1]]]));
