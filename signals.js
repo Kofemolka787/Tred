@@ -42,6 +42,8 @@ window.TredSignals=(()=>{
   }
   function why(setup){
     const detail=node("details","signal-why");detail.append(node("summary","","Почему этот сценарий"));
+    if(setup.strategy_name)detail.append(node("p","",`Стратегия: ${setup.strategy_name}. Таймфреймы: ${(setup.timeframes||[]).map(p=>"M"+p/60).join(" + ")}.`));
+    if(setup.strategy_risk)detail.append(node("p","","Слабость стратегии: "+setup.strategy_risk));
     if(setup.ai)detail.append(node("p","",`${setup.ai.provider} · ${setup.ai.model}: ${setup.ai.summary}`),node("p","","Что учитывать: "+setup.ai.risk));
     const list=node("ol");for(const line of setup.evidence||[])list.append(node("li","",line));detail.append(list);
     detail.append(node("p","","BOS — закрытие за подтверждённым экстремумом. FVG — разрыв между первой и третьей свечой импульса. ATR — средний истинный диапазон свечей. Sweep — вынос экстремума с возвратом."));
@@ -70,10 +72,11 @@ window.TredSignals=(()=>{
       if(result.status==="ai_unavailable"&&/^[a-z_]{3,48}$/.test(result.ai_error_code||""))host.append(node("p","quiet-text","Код проверки: "+result.ai_error_code));
       if(result.progress)host.append(node("p","",`Пары: ${result.progress.checked} / ${result.progress.total} с полными данными · история: ${result.progress.history_ready} · свежие котировки: ${result.progress.quoted}`));
       if(result.status==="loading"){const b=node("button","primary-small","Остановить проверку");b.id="cancel-scan";b.type="button";host.append(b);}
-      if(result.ai){host.append(node("p","",`${result.ai.provider} · ${result.ai.model} · рассмотрено пар: ${result.ai.reviewed_pairs}`),node("p","","Риск/ограничение: "+result.ai.risk));}
+      if(result.ai){host.append(node("p","",`${result.ai.provider} · ${result.ai.model} · в списке: ${result.ai.reviewed_pairs}${Number.isInteger(result.ai.ready_pairs)?" · полные данные на момент анализа: "+result.ai.ready_pairs:""}${Number.isInteger(result.ai.qualified_setups)?" · найдено сценариев: "+result.ai.qualified_setups:""}`),node("p","","Риск/ограничение: "+result.ai.risk));}
       return;
     }
     host.append(node("p","eyebrow",`${result.market==="otc"?"OTC":"ОБЫЧНЫЙ РЫНОК"} · ${result.ai?"ИИ-СЦЕНАРИЙ":"СЦЕНАРИЙ ПО СТРУКТУРЕ"}`),node("h2","",`${result.symbol} ${result.direction==="up"?"↑ ВВЕРХ":"↓ ВНИЗ"}`),node("p","",`${result.expiry} мин · выплата ${Math.round(result.payout*100)}% · анализ M${result.timeframes[0]/60} + M${result.timeframes[1]/60}`));
+    if(result.strategy_name)host.append(node("p","entry-window",result.strategy_name));
     if(result.ai)host.append(node("p","",`${result.ai.provider} · ${result.ai.model} · рассмотрено пар: ${result.ai.reviewed_pairs} · полные данные: ${result.checked_pairs} / ${result.total_pairs}`));
     const preview=node("p","entry-window");preview.id="close-preview";host.append(preview);
     const canvas=node("div","market-chart");chart(canvas,result);host.append(canvas);
@@ -103,6 +106,7 @@ window.TredSignals=(()=>{
     const list=$("#coverage-list");list.replaceChildren();
     for(const p of feed?.pairs||[]){
       const row=node("p","",`${p.symbol} · ${Math.round(p.payout*100)}% · ${p.quote_live?"цена поступает":"нет свежей цены"} · ${(p.timeframes||feed.timeframes).map((t,i)=>`M${t/60}: ${p.bars[i]}`).join(" / ")} · ${p.reason}`);
+      if(p.regimes?.length){const labels={trend:"тренд",range:"боковик",transition:"переходный"};row.append(node("small","","Режим: "+p.regimes.map((r,i)=>`M${(p.timeframes||feed.timeframes)[i]/60} — ${labels[r]||r}`).join(" / ")));}
       const d=p.history_status;
       if(d){const labels={ohlc:"распознаны OHLC",ticks:"свечи по тикам",empty:"пустой ответ",period_missing:"в ответе нет таймфрейма",unsupported_period:"нужен поддерживаемый период свечи",format_unrecognized:"формат пока не распознан"};row.append(node("small","",`История: ${d.event} · ${d.period?"M"+d.period/60:"период не указан"} · строк ${d.rows} · распознано ${d.bars} · ${labels[d.code]||"ожидаем данные"}`));}
       list.append(row);
@@ -110,7 +114,12 @@ window.TredSignals=(()=>{
     const suggestions=$(".pair-suggestions");
     if(feed?.pairs?.length){suggestions.replaceChildren();for(const p of feed.pairs){const b=node("button","",`${p.symbol} · ${Math.round(p.payout*100)}%`);b.type="button";b.dataset.symbol=p.symbol;suggestions.append(b);}}
     $("#min-payout").value=state.preferences.min_payout||85;
-    $("#signals-upgrade").hidden=state.mode!=="api"||state.market_data_version===3;
+    const strategies=$("#strategy-list"),strategyHelp=$("#strategy-help");
+    if(strategies&&strategyHelp){
+      strategyHelp.hidden=!feed?.strategy_catalog?.length;strategies.replaceChildren();
+      for(const s of feed?.strategy_catalog||[]){const row=node("p");row.append(node("strong","",s.name),node("span",""," — "+s.rule),node("small","","Слабость: "+s.weakness));strategies.append(row);}
+    }
+    $("#signals-upgrade").hidden=state.mode!=="api"||state.market_data_version===3&&!!feed?.strategy_catalog?.length;
     $("#ai-status").textContent=state.mode!=="api"?"ИИ подключается к твоему серверу TRED.":state.ai?.configured?`ИИ: ${state.ai.provider} · ${state.ai.model}. Ключ настроен; решение проверяется по свежим данным.`:"ИИ ещё не настроен. Запусти SETUP-LUNAROUTE.cmd на компьютере и введи ключ LunaRoute локально.";
     const help=$("#feed-help");
     if(feed?.blocked){

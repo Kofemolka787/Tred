@@ -6,6 +6,7 @@ Only completed, contiguous bars and already-confirmed pivots are considered.
 import math
 import json
 from market_feed import gate
+from market_strategies import STRATEGIES, evaluate, valid_bar, price_allows
 
 
 PERIODS = {5: (60, 300), 10: (60, 300), 15: (300, 900)}
@@ -28,6 +29,8 @@ def aggregate(rows, source, target, now):
         if start + target > now or set(group) != set(expected):
             continue
         bars = [group[t] for t in expected]
+        if not all(valid_bar(bar) for bar in bars):
+            continue
         result.append({"time": start, "open": bars[0]["open"], "close": bars[-1]["close"],
                        "high": max(b["high"] for b in bars), "low": min(b["low"] for b in bars), "origin": "ticks" if any(b.get("origin")=="ticks" for b in bars) else "broker"})
     return result
@@ -185,25 +188,24 @@ def rank(assets, histories, *, expiry, market, symbol, allow_otc, now, min_payou
             rejected.append((priority,status["reason"]))
             continue
         periods,bars,analyses=frame_data(histories,asset["symbol"],expiry,now)
-        first, context = analyses
-        if first["status"] == "candidate" and context.get("context_ready") and first["direction"] == context["direction"]:
-            up = first["direction"] == "up"
+        setups, frames, reason = evaluate(bars, periods, analyses, now)
+        if not setups:
+            rejected.append((6 if all(a.get("history_ready") for a in analyses) else 5, reason))
+        for first in setups:
             price = asset["price"]
-            if abs(price-first["close"]) > .5*first["atr"] or (price <= first["invalidation"] if up else price >= first["invalidation"]):
+            if not price_allows(first, price):
                 rejected.append((7,"Цена уже ушла от зоны или нарушила условие сценария. Вход пропущен."))
                 continue
             results.append({"symbol": asset["symbol"], "market": asset["market"], "direction": first["direction"],
-                            "score": first["score"]+context["score"], "evidence": [*first["evidence"], f"Старший M{periods[1]//60} подтверждает направление структуры."],
+                            "strategy": first["strategy"], "strategy_name": first["strategy_name"], "strategy_risk": first["strategy_risk"],
+                            "score": first["score"], "evidence": [*first["evidence"], *([f"Старший M{periods[1]//60} подтверждает направление структуры."] if first["strategy"] == "smart_money" else [])],
                             "timeframes": list(periods), "payout": asset["payout"], "price": price,
                             "quote_time": asset["quote_time"], "zones": first["zones"], "events": first["events"],
                             "channel": first["channel"], "invalidation": first["invalidation"], "atr": first["atr"],
                             "entry_low": price-.35*first["atr"], "entry_high": price+.35*first["atr"],
                             "catalog_age": status["catalog_age"], "catalog_source": status["catalog_source"],
-                            "bar_time": first["bar_time"], "context_bar_time": context["bar_time"], "candles": bars[0][-60:]})
-        else:
-            reason=next((a["reason"] for a in analyses if not a.get("context_ready")), first["reason"] if first["status"] != "candidate" else "Таймфреймы расходятся: вход пропущен.")
-            rejected.append((6 if all(a.get("history_ready") for a in analyses) else 5,reason))
-    return sorted(results, key=lambda x: (x["payout"] < .92, -x["score"], -x["payout"], x["symbol"])), [reason for _,reason in sorted(rejected,key=lambda r:-r[0])]
+                            "bar_time": first["bar_time"], "context_bar_time": frames[1]["bar_time"], "candles": frames[0]["rows"][-60:]})
+    return sorted(results, key=lambda x: (x["payout"] < .92, -x["score"], -x["payout"], x["symbol"], x["strategy"])), [reason for _,reason in sorted(rejected,key=lambda r:-r[0])]
 
 
 def coverage(assets, histories, *, market, expiry, min_payout, now):
@@ -215,14 +217,20 @@ def coverage(assets, histories, *, market, expiry, min_payout, now):
         selected,bars,checks=frame_data(histories,asset["symbol"],expiry,now)
         status=gate(asset,expiry=expiry,min_payout=min_payout,now=now)
         quote_live,eligible=status["quote_live"],status["eligible"]
+        setups, frames, strategy_reason = evaluate(bars, selected, checks, now) if status["code"] == "ready" and all(a.get("history_ready") for a in checks) else ([], [], "")
+        current = [s for s in setups if price_allows(s, asset["price"])]
+        if setups and not current:
+            strategy_reason = "Сценарий найден, но цена уже ушла от зоны или нарушила условие отмены."
         rows.append({"symbol": asset["symbol"], "payout": asset["payout"], "eligible": eligible, "metadata_eligible":status["metadata_eligible"],
                      "quote_live": quote_live, "price": asset.get("price"), "quote_time": asset.get("quote_time"), "timeframes":list(selected), "tick_bars":[sum(r.get("origin")=="ticks" for r in rows) for rows in bars], "bars": [len(r) for r in bars],
                      "history_ready": all(a.get("history_ready") for a in checks),
+                     "strategies": list(dict.fromkeys(s["strategy_name"] for s in current)),
+                     "regimes": [f["regime"] for f in frames],
                      "stage": status["code"] if status["code"]!="ready" else "history" if not all(a.get("history_ready") for a in checks) else "structure",
                      "catalog_age":status["catalog_age"],"catalog_source":status["catalog_source"],
                      "history_status":json.loads(asset["history_status"]) if asset.get("history_status") else None,
-                     "reason":status["reason"] if status["code"]!="ready" else next((a["reason"] for a in checks if not a.get("context_ready")), "Данные для анализа получены.")})
+                     "reason":status["reason"] if status["code"]!="ready" else next((a["reason"] for a in checks if not a.get("history_ready")), "Сценарии: "+", ".join(dict.fromkeys(s["strategy_name"] for s in current)) if current else strategy_reason)})
     stages={name:sum(r["stage"]==name for r in rows) for name in ("closed","payout","expiry","catalog","quote","history","structure")}
     return {"blocked":stages,"catalog": len(rows), "eligible": sum(r["eligible"] for r in rows), "metadata_eligible":sum(r["metadata_eligible"] for r in rows), "quoted": sum(r["quote_live"] for r in rows),
             "ready": sum(r["eligible"] and r["quote_live"] and r["history_ready"] for r in rows),
-            "timeframes": list(periods), "pairs": sorted(rows, key=lambda r: (-r["eligible"], -r["quote_live"], -r["payout"], r["symbol"]))}
+            "strategy_catalog": list(STRATEGIES), "timeframes": list(periods), "pairs": sorted(rows, key=lambda r: (-r["eligible"], -r["quote_live"], -r["payout"], r["symbol"]))}

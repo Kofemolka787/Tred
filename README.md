@@ -1,8 +1,10 @@
 # TRED Mini App
 
-TRED v0.3.22 for @Tr1edBot_bot. Open https://kofemolka787.github.io/Tred/ from Telegram.
+TRED v0.3.23 for @Tr1edBot_bot. Open https://kofemolka787.github.io/Tred/ from Telegram.
 
-[Setup and update in Russian](backend-src/CONNECT-RU.md) · [Backend source](backend-src/) · [Download 0.3.22](https://kofemolka787.github.io/Tred/tred-backend-v0.3.22.zip)
+[Setup and update in Russian](backend-src/CONNECT-RU.md) · [Backend source](backend-src/) · [Download 0.3.23](https://kofemolka787.github.io/Tred/tred-backend-v0.3.23.zip)
+
+Five independent setup families now cover Smart Money, EMA20/50 trend pullbacks, breakout/retests, range rebounds and false breakouts. Each has its own market-regime/context conditions; a range setup does not require trending SMC pivots. The model selects an exact symbol/direction/strategy tuple, with fresh revalidation of that same setup. EMA/Wilder ATR/RSI, Bollinger, MACD and Stochastic facts are computed from closed bars; indicators are confirmations, not independent promises of winning trades. The UI identifies the strategy, weakness and actual full-data coverage, and preserves them in the user-reported journal. Periods are explicitly seconds (300=M5, 900=M15). See [Russian strategy details](backend-src/STRATEGIES-RU.md). Synthetic recognition and signed mobile/API checks pass; no real profitability or model-weight training is claimed.
 
 Read-only demo/real Pocket balances, Telegram-scoped connection discovery, and LunaRoute or direct OpenAI review of price structure/Smart Money evidence for 5/10/15-minute scenarios. Catalog and pair selection show all received instruments, including non-currency categories, without the former 24/100-row truncation. Only open instruments meeting payout/expiry filters are analyzed (prefer 92%, floor 85%).
 

@@ -84,7 +84,7 @@ class AIDecisionTests(unittest.TestCase):
             self.assertEqual(caught.exception.code, code)
 
     def test_wait_needs_no_fabricated_evidence_and_is_not_turned_into_entry(self):
-        wait = {**self.wire,'action':'wait','symbol':'','direction':'none','evidence':[],
+        wait = {**self.wire,'action':'wait','symbol':'','direction':'none','strategy':'','evidence':[],
                 'summary':'Ни одна реакция на зону не убедительна.'}
         self.assertEqual(self.decode(wait)['action'], 'wait')
 

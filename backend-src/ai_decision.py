@@ -7,7 +7,7 @@ import re
 MESSAGES = {
     'decision_json': 'Модель не вернула один полный JSON-объект в требуемом формате.',
     'decision_fields': 'Поля ответа модели не соответствуют формату сценария.',
-    'decision_direction': 'Пара или направление ИИ отсутствуют среди подтверждённых сценариев.',
+    'decision_direction': 'Пара, направление или стратегия ИИ отсутствуют среди подтверждённых сценариев.',
     'decision_wait': 'Модель некорректно оформила решение об ожидании.',
     'decision_explanation': 'В ответе модели нет полного объяснения и описания риска.',
     'decision_evidence': 'Для входа нужны как минимум две разные ссылки на подтверждённые данные.',
@@ -25,22 +25,23 @@ WIRE_SCHEMA = {'type': 'object', 'properties': {
     'action': {'type': 'string', 'enum': ['enter', 'wait']},
     'symbol': {'type': 'string'},
     'direction': {'type': 'string', 'enum': ['up', 'down', 'none']},
+    'strategy': {'type': 'string'},
     'summary': {'type': 'string'}, 'risk': {'type': 'string'},
     'evidence': {'type': 'array', 'items': {'type': 'object', 'properties': {
         'ref': {'type': 'string'}, 'explanation': {'type': 'string'}},
         'required': ['ref', 'explanation'], 'additionalProperties': False}}},
-    'required': ['action', 'symbol', 'direction', 'summary', 'risk', 'evidence'],
+    'required': ['action', 'symbol', 'direction', 'strategy', 'summary', 'risk', 'evidence'],
     'additionalProperties': False}
 
 FORMAT = """Верни только один JSON-объект, без Markdown, рассуждений и других полей.
-Обязательные поля: action (enter или wait), symbol, direction (up/down/none),
+Обязательные поля: action (enter или wait), symbol, direction (up/down/none), strategy,
 summary (непустое объяснение по-русски), risk (непустое ограничение по-русски), evidence.
-Для enter скопируй symbol и direction из одного элемента qualified. evidence — массив
+Для enter скопируй symbol, direction и strategy из одного элемента qualified. evidence — массив
 из 2–4 объектов {"ref":"r0","explanation":"конкретная причина"}. Скопируй ref
 ТОЛЬКО из evidence_refs той же пары. Разные ref ссылаются на закрытую свечу или событие;
 длинные time и period в ответ не переписывай. Не используй вымышленные ссылки.
 Если qualified пуст или ни один сценарий не убедителен, верни wait. Формат ожидания:
-{"action":"wait","symbol":"","direction":"none","summary":"Почему входа нет",
+{"action":"wait","symbol":"","direction":"none","strategy":"","summary":"Почему входа нет",
 "risk":"Чего не хватает или что может отменить сценарий","evidence":[]}.
 Это пример формата, а не готовый анализ. Решение принимай только по данным запроса."""
 

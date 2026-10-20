@@ -58,7 +58,7 @@ class AIProviderTests(unittest.TestCase):
             self.assertEqual(body['text']['format']['type'], 'json_schema')
             value=json.loads(body['input'][1]['content'])
             self.assertNotIn(KEY, json.dumps(value))
-            return reply({'action':'wait','symbol':'','direction':'none','summary':'Нет подтверждённой реакции на зону.','risk':'Нужны свежие свечи.','evidence':[]})
+            return reply({'action':'wait','symbol':'','direction':'none','strategy':'','summary':'Нет подтверждённой реакции на зону.','risk':'Нужны свежие свечи.','evidence':[]})
         analyzer=OpenAIAnalyzer(self.tmp.name, opener=opener);self.addCleanup(analyzer.executor.shutdown)
         result=analyzer.review({'pairs':[],'qualified':[]})
         self.assertEqual(result['provider'],'LunaRoute')
@@ -72,7 +72,7 @@ class AIProviderTests(unittest.TestCase):
         save(self.tmp.name, KEY, MODEL, allowed_users=[101], provider='lunaroute')
         def opener(request, timeout):
             save(self.tmp.name, 'fixture-new-openai-config-key', allowed_users=[101])
-            return reply({'action':'wait','symbol':'','direction':'none','summary':'Нет входа.','risk':'Дождаться реакции.','evidence':[]})
+            return reply({'action':'wait','symbol':'','direction':'none','strategy':'','summary':'Нет входа.','risk':'Дождаться реакции.','evidence':[]})
         analyzer=OpenAIAnalyzer(self.tmp.name,opener=opener);self.addCleanup(analyzer.executor.shutdown)
         with self.assertRaisesRegex(AIError,'Настройки ИИ изменились'):
             analyzer.review({'pairs':[],'qualified':[]})

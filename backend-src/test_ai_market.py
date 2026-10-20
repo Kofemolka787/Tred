@@ -78,7 +78,7 @@ class AIMarketTests(unittest.TestCase):
         for forbidden in ('account_id', 'user_id', 'balance', 'token', 'api_key'):
             self.assertNotIn(forbidden, raw)
         reference = FixtureAI().submit(1, value).result()['decision']
-        decision = {k: reference[k] for k in ('action', 'symbol', 'direction', 'summary', 'risk', 'evidence')}
+        decision = {k: reference[k] for k in ('action', 'symbol', 'direction', 'strategy', 'summary', 'risk', 'evidence')}
         seen = []
         def opener(request, timeout):
             body = json.loads(request.data); seen.append(body)
@@ -102,7 +102,7 @@ class AIMarketTests(unittest.TestCase):
         class WaitAI(FixtureAI):
             def submit(self, job_id, value):
                 f = super().submit(job_id, value)
-                d = f.result()['decision']; d.update(action='wait', symbol='', direction='none', evidence=[], summary='Реакция недостаточно убедительна.')
+                d = f.result()['decision']; d.update(action='wait', symbol='', direction='none', strategy='', evidence=[], summary='Реакция недостаточно убедительна.')
                 return f
         self.ledger.ai = WaitAI(); self.now += 3
         result = self.ledger.start_scan(101)
@@ -153,7 +153,7 @@ class AIMarketTests(unittest.TestCase):
         def opener(request, timeout):
             value = json.loads(json.loads(request.data)['input'][1]['content']); calls.append(value)
             d = FixtureAI().submit(1, value).result()['decision']
-            d = {k:d[k] for k in ('action','symbol','direction','summary','risk','evidence')}
+            d = {k:d[k] for k in ('action','symbol','direction','strategy','summary','risk','evidence')}
             return io.BytesIO(json.dumps({'status':'completed','output':[{'content':[{'type':'output_text','text':json.dumps(d)}]}]}).encode())
         save(self.tmp.name, 'fixture-key-for-batching-only', allowed_users=[101])
         result = OpenAIAnalyzer(self.tmp.name, opener=opener).review(data)
@@ -227,7 +227,7 @@ class AIMarketTests(unittest.TestCase):
         def opener(request,timeout):
             body=json.loads(request.data);v=json.loads(body['input'][1]['content']);calls.append(v)
             self.assertTrue(body['stream']);self.assertEqual(len(v['pairs']),39)
-            d=FixtureAI().submit(1,v).result()['decision'];d={k:d[k] for k in ('action','symbol','direction','summary','risk','evidence')}
+            d=FixtureAI().submit(1,v).result()['decision'];d={k:d[k] for k in ('action','symbol','direction','strategy','summary','risk','evidence')}
             return io.BytesIO(json.dumps({'status':'completed','output':[{'content':[{'type':'output_text','text':json.dumps(d)}]}]}).encode())
         save(self.tmp.name,'lr_fixture_small_payload_for_39_pairs',allowed_users=[101],provider='lunaroute')
         ai=OpenAIAnalyzer(self.tmp.name,opener=opener);self.addCleanup(ai.executor.shutdown)

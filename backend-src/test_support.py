@@ -17,7 +17,7 @@ def signed_data(key, user_id=101, *, stamp=None, first_name="Тест", bot_id=B
 
 def wire_decision(decision, payload):
     """Synthetic provider output uses the actual request's evidence IDs."""
-    value = {k: decision[k] for k in ('action', 'symbol', 'direction', 'summary', 'risk', 'evidence')}
+    value = {k: decision[k] for k in ('action', 'symbol', 'direction', 'strategy', 'summary', 'risk', 'evidence')}
     if 'evidence_refs' in payload:
         refs = {(r['symbol'], r['period'], r['time']): r['ref'] for r in payload['evidence_refs']}
         value['evidence'] = [{'ref': refs[(e['symbol'], e['period'], e['time'])],
@@ -47,6 +47,7 @@ class FixtureAI:
             facts = next((p for p in snapshot["pairs"] if selected and p["symbol"] == selected["symbol"]), None)
             evidence = [{"symbol": selected["symbol"], "period": frame["period"], "time": frame["bar_time"], "explanation": "Подтверждённая структура и реакция на зону на этом периоде."} for frame in facts["frames"]] if facts else []
             decision = {"action": "enter" if selected else "wait", "symbol": selected["symbol"] if selected else "", "direction": selected["direction"] if selected else "none",
+                        "strategy": selected["strategy"] if selected else "",
                         "summary": "Согласованная структура и подтверждённая реакция." if selected else "Нет подтверждённой реакции на зону.", "risk": "На OTC наблюдаются только цены брокера; результат не гарантирован.", "evidence": evidence,
                         "provider": "OpenAI", "model": "fixture-model", "elapsed_ms": 1, "reviewed_pairs": len(snapshot["pairs"]), "batches": 1}
             if 'evidence_refs' in snapshot:

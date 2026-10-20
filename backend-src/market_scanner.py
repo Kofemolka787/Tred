@@ -144,16 +144,18 @@ class MarketScanner:
                         db.execute("UPDATE scan_jobs SET status='ai' WHERE id=?", (job["id"],))
                     if not future.done():
                         return {"status": "loading", "phase": "ai", "scan_id": job["id"], "deadline": job["deadline"], "progress": progress,
-                                "reason": f"{self.ai.status(uid)['provider']} сравнивает структуру, Smart Money и реакцию цены по полученным парам. Решение появится здесь автоматически; повторно нажимать кнопку не нужно."}
+                                "reason": f"{self.ai.status(uid)['provider']} сравнивает Smart Money, откаты, ретесты, отскоки и ложные пробои с учётом режима рынка. Решение появится здесь автоматически; повторно нажимать кнопку не нужно."}
                     reviewed = future.result()
                     decision, original = reviewed["decision"], reviewed["snapshot"]
                     info = {k: decision[k] for k in ("provider", "model", "elapsed_ms", "reviewed_pairs", "batches")}
-                    info.update(summary=decision["summary"], risk=decision["risk"], evidence=decision["evidence"], as_of=original["as_of"])
+                    info.update(summary=decision["summary"], risk=decision["risk"], evidence=decision["evidence"], as_of=original["as_of"],
+                                ready_pairs=sum(p.get("data_ready", False) for p in original["pairs"]),
+                                qualified_setups=len(original["qualified"]))
                     result = {"status": "skipped", "reason": decision["summary"], "ai": info}
                     if decision["action"] == "enter":
                         _, fresh = snapshot(assets, histories, prefs, now)
-                        selected = next((c for c in fresh if c["symbol"] == decision["symbol"] and c["direction"] == decision["direction"]), None)
-                        prior = next((q for q in original["qualified"] if q["symbol"] == decision["symbol"]), None)
+                        selected = next((c for c in fresh if (c["symbol"], c["direction"], c["strategy"]) == (decision["symbol"], decision["direction"], decision["strategy"])), None)
+                        prior = next((q for q in original["qualified"] if (q["symbol"], q["direction"], q["strategy"]) == (decision["symbol"], decision["direction"], decision["strategy"])), None)
                         if selected and prior and selected["bar_time"] == prior["bar_time"] and selected["context_bar_time"] == prior["context_bar_time"] and selected["timeframes"] == prior["timeframes"] and prior["entry_low"] <= selected["price"] <= prior["entry_high"] and now - original["as_of"] <= 180:
                             result = {"status": "candidate", **selected, "expiry": prefs["expiry"], "entry_at": now, "valid_until": now + 30, "expires_at": now + prefs["expiry"] * 60,
                                       "validated": False, "min_payout": prefs["min_payout"] / 100, "probability": None, "ai": info,

@@ -19,18 +19,29 @@ from ai_provider import ModelReplyError, load_config, response_body, response_te
 from ai_decision import DecisionError, FORMAT, WIRE_SCHEMA, prepare_payload, decode_decision
 from ai_response import ResponseError, read_response
 from market_feed import catalog_current
+from market_strategies import frame, detect, STRATEGIES
 
-SYSTEM = """Ты — аналитик TRED. Принимай решение на русском по Smart Money и структуре цены.
-Сравни все переданные инструменты: подтверждённые HH/HL либо LH/LL, BOS, предполагаемые
-OB/FVG, sweep, реакцию на границу канала, ATR, направление старшего периода.
+SYSTEM = """Ты — аналитик TRED. Сравни сценарии по пяти семействам: Smart Money,
+откат EMA 20/50, пробой с ретестом, отскок в диапазоне, ложный пробой.
+Выбирай стратегию под режим рынка. Боковому отскоку не требуется трендовая HH/HL,
+но ему нужны границы диапазона, подтверждённая реакция и подходящий старший режим.
+RSI, MACD, Stochastic, Bollinger Bands и поглощение — дополнительные подтверждения,
+а не самостоятельное основание. Не требуй одновременно всех индикаторов.
+period и timeframes заданы В СЕКУНДАХ: 60=M1, 120=M2, 300=M5, 600=M10, 900=M15.
+expiry_minutes — длительность сделки в минутах, не период свечи. В объяснениях пиши M1/M5/M15.
+Сравни все переданные инструменты: режим, EMA, подтверждённые уровни, HH/HL либо LH/LL,
+BOS, предполагаемые OB/FVG, sweep, реакцию на границу канала, ATR и старший период.
 Используй только переданные факты и закрытые свечи. Не выдумывай CHoCH, зоны, события,
 котировки или данные по отсутствующим парам. Не считай свечи OTC доказательством реальных
 ордеров/стопов/биржевой ликвидности. Процент выплаты не является вероятностью выигрыша.
-Вход разрешён только для symbol/direction из qualified; выбери наиболее обоснованный
+Вход разрешён только для symbol/direction/strategy из qualified; выбери наиболее обоснованный
 либо wait. Не выдавай сигнал ради наличия сигнала. Учитывай близость отмены, поздний вход,
 согласование периодов, волатильность и выбранную экспирацию. Не предлагай увеличение
 ставок, пополнение, мартингейл или автоматические ордера. При wait объясни препятствие.
 Объясни ученику связь конкретных подтверждённых признаков с решением; не обещай прибыль.
+smc_status относится только к Smart Money: его skipped не отменяет другие стратегии.
+В summary/risk называй стратегию и причину простыми словами; не пиши qualified,
+data_ready или skipped. Число строк каталога не равно числу проанализированных графиков.
 Поле evidence должно ссылаться на существующие ref из evidence_refs.
 Сводки data_ready=false показывают недостаток данных, их графики не
 считаются проанализированными. Ответ краткий: summary 1–3 предложения, risk 1–2,
@@ -40,12 +51,13 @@ evidence 2–4 конкретных признака для входа. Вся �
 SCHEMA = {"type": "object", "properties": {
     "action": {"type": "string", "enum": ["enter", "wait"]},
     "symbol": {"type": "string"}, "direction": {"type": "string", "enum": ["up", "down", "none"]},
+    "strategy": {"type": "string"},
     "summary": {"type": "string"}, "risk": {"type": "string"},
     "evidence": {"type": "array", "items": {"type": "object", "properties": {
         "symbol": {"type": "string"}, "period": {"type": "integer", "enum": [60, 120, 300, 600, 900]},
         "time": {"type": "number"}, "explanation": {"type": "string"}},
         "required": ["symbol", "period", "time", "explanation"], "additionalProperties": False}}},
-    "required": ["action", "symbol", "direction", "summary", "risk", "evidence"], "additionalProperties": False}
+    "required": ["action", "symbol", "direction", "strategy", "summary", "risk", "evidence"], "additionalProperties": False}
 
 
 class AIError(ValueError):
@@ -204,12 +216,14 @@ def validate(decision, snapshot):
         raise DecisionError('decision_explanation')
     if not isinstance(decision["evidence"], list) or len(decision["evidence"]) > 12:
         raise DecisionError('decision_evidence')
-    allowed = {(r["symbol"], r["direction"]) for r in snapshot["qualified"]}
-    if decision["action"] == "enter" and (decision["symbol"], decision["direction"]) not in allowed:
+    if not isinstance(decision["strategy"], str):
+        raise DecisionError('decision_fields')
+    allowed = {(r["symbol"], r["direction"], r["strategy"]) for r in snapshot["qualified"]}
+    if decision["action"] == "enter" and (decision["symbol"], decision["direction"], decision["strategy"]) not in allowed:
         raise DecisionError('decision_direction')
     if decision["action"] == "enter" and len(decision["evidence"]) < 2:
         raise DecisionError('decision_evidence')
-    if decision["action"] == "wait" and (decision["symbol"] or decision["direction"] != "none"):
+    if decision["action"] == "wait" and (decision["symbol"] or decision["direction"] != "none" or decision["strategy"]):
         raise DecisionError('decision_wait')
     facts = {(p["symbol"], f["period"]): f for p in snapshot["pairs"] if p.get('data_ready') for f in p.get("frames", [])}
     references = set()
@@ -238,14 +252,28 @@ def snapshot(assets, histories, prefs, now):
         periods, bars, checks = frame_data(histories, asset["symbol"], prefs["expiry"], now)
         frames = []
         for period, rows, check in zip(periods, bars, checks):
+            rows = [r for r in rows if r["time"]+period <= now]
             fields = ("status", "reason", "direction", "bar_time", "evidence", "zones", "events", "channel", "atr", "invalidation", "close")
             frames.append({"period": period, **{k: check[k] for k in fields if k in check},
                            "recent_ohlc": [[r[k] for k in ("time", "open", "high", "low", "close")] for r in rows[-32:]]})
         ready=bool(catalog_current(asset,now) and asset.get('quote_time') is not None and now-asset['quote_time']<=10 and all(c.get('history_ready') for c in checks))
         if not ready:
             frames=[{'period':p,'status':c.get('status'),'reason':c.get('reason'),'bars_received':len(rows),'bar_time':c.get('bar_time')} for p,rows,c in zip(periods,bars,checks)]
+        else:
+            for target, period, rows in zip(frames, periods, bars):
+                features = frame(rows, period, now)
+                if features:
+                    patterns = detect(features)
+                    target.update(timeframe=f"M{period//60}", bar_time=features["bar_time"],
+                                  regime=features["regime"], trend=features["trend"],
+                                  indicators=features["indicators"], levels=features["levels"],
+                                  smc_status=target["status"], smc_reason=target.get("reason"), status="observed",
+                                  reason="Закрытые данные для сравнения стратегий получены.",
+                                  setups=[{k:s[k] for k in ("strategy", "direction", "evidence", "events")} for s in patterns])
+                    target["events"] = target.get("events", []) + [e for s in patterns for e in s["events"]]
         pairs.append({"symbol": asset["symbol"], "market": asset["market"], "payout": asset["payout"], "price": asset.get("price"), "quote_time": asset.get("quote_time"), 'data_ready':ready, "frames": frames})
-    value = {"as_of": now, "expiry_minutes": prefs["expiry"], "minimum_payout": prefs["min_payout"], "pairs": pairs,
-             "qualified": [{k: c[k] for k in ("symbol", "direction", "timeframes", "bar_time", "context_bar_time", "entry_low", "entry_high", "invalidation", "payout")} for c in candidates]}
+    value = {"as_of": now, "expiry_minutes": prefs["expiry"], "period_unit": "seconds", "minimum_payout": prefs["min_payout"], "pairs": pairs,
+             "strategies": list(STRATEGIES),
+             "qualified": [{k: c[k] for k in ("symbol", "direction", "strategy", "strategy_name", "strategy_risk", "timeframes", "bar_time", "context_bar_time", "entry_low", "entry_high", "invalidation", "payout")} for c in candidates]}
     # Private account/Telegram identifiers, money and credentials are absent.
     return value, candidates

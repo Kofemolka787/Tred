@@ -29,7 +29,7 @@ with tempfile.TemporaryDirectory(prefix='tred-sse-') as temporary:
             value=json.loads(body['input'][1]['content']);state['requests']+=1
             assert not any(k in json.dumps(value) for k in ('account_id','api_key','balance','user_id','token'))
             d=FixtureAI().submit(1,value).result()['decision']
-            d={k:d[k] for k in ('action','symbol','direction','summary','risk','evidence')}
+            d={k:d[k] for k in ('action','symbol','direction','strategy','summary','risk','evidence')}
             mode=state['mode']
             self.send_response(200);self.send_header('Content-Type','text/event-stream');self.send_header('Transfer-Encoding','chunked');self.end_headers()
             def chunk(payload):

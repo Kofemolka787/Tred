@@ -40,7 +40,7 @@ with tempfile.TemporaryDirectory(prefix='tred-ai-scan-') as temporary:
             assert 0 < len(value['pairs']) <= 64
             assert not any(key in json.dumps(value) for key in ('account_id', 'balance', 'api_key', 'token', 'user_id'))
             decision=FixtureAI().submit(1,value).result()['decision']
-            decision={k:decision[k] for k in ('action','symbol','direction','summary','risk','evidence')}
+            decision={k:decision[k] for k in ('action','symbol','direction','strategy','summary','risk','evidence')}
             text='```json\n'+json.dumps(decision, ensure_ascii=False)+'\n```' if model_mode[0]=='valid' else 'fixture-private-malformed-response'
             reply = json.dumps({'status': 'completed', 'output': [{'type': 'message', 'content': [{'type': 'output_text', 'text': text}]}]}).encode()
             content_type='application/json'
