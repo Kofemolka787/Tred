@@ -115,7 +115,9 @@ window.TredSignals=(()=>{
     const help=$("#feed-help");
     if(feed?.blocked){
       const b=feed.blocked;
-      help.textContent=b.history?`Автозагрузка истории: ожидают данные ${b.history} пар. Расширение само запрашивает свечи; листать графики вручную не нужно. Оставь терминал и сервер открытыми.`:b.catalog?`Каталог канала недоступен: ${b.catalog}. После обновления расширения перезагрузи вкладку Pocket один раз.`:feed.ready?`Данные готовы по ${feed.ready} парам. ИИ сравнит доступные структуры и выберет сценарий либо объяснит пропуск.`:"В каталоге показаны все полученные пары выбранного рынка, включая закрытые и неподходящие по выплате.";
+      const matching=(feed.pairs||[]).filter(p=>!["closed","payout","expiry"].includes(p.stage));
+      const missingHistory=matching.filter(p=>!p.history_ready).length,missingQuotes=matching.filter(p=>!p.quote_live).length;
+      help.textContent=matching.length&&(missingHistory||missingQuotes)?`Сбор данных: историю ожидают ${missingHistory} пар, свежую цену — ${missingQuotes}. Расширение обновляет их автоматически; листать графики вручную не нужно. Оставь терминал и сервер открытыми.`:b.catalog?`Каталог канала недоступен: ${b.catalog}. После обновления расширения перезагрузи вкладку Pocket один раз.`:feed.ready?`Данные готовы по ${feed.ready} парам. ИИ сравнит доступные структуры и выберет сценарий либо объяснит пропуск.`:"В каталоге показаны все полученные пары выбранного рынка, включая закрытые и неподходящие по выплате.";
     }
     const sessions=state.signal_sessions||[],pending=sessions.filter(s=>!s.result),container=$("#live-sessions");
     const opened=new Set([...container.querySelectorAll("details[open]")].map(d=>d.dataset.session));container.replaceChildren();

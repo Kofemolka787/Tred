@@ -8,6 +8,7 @@ h.advance(Number(stamp)-now);
 let pending=[],socket,forwarded=0,outgoing=[],timers=[],responses=[],fixtures={};
 const automatic=process.argv.includes("--auto-fixture");
 const probesOnly=process.argv.includes("--quote-probe-fixture");
+const unindexed=process.argv.includes("--unindexed-fast-fixture");
 class Socket {
  constructor(){this.handlers={};this.readyState=1;this.subscribed=new Set();}
  addEventListener(name,fn){this.handlers[name]=fn;}
@@ -19,11 +20,13 @@ class Socket {
     const at=h.context.Date.now()/1000+7200;
     responses.push(this.emit('451-["loadHistoryPeriodFast",{"_placeholder":true,"num":0}]'));
     responses.push(this.emit('2'));
-    responses.push(this.emit(new TextEncoder().encode(JSON.stringify({asset:value.asset,index:value.index,period:1,history:[[at-1,106.29],[at,106.30]]})).buffer));
+    responses.push(this.emit(new TextEncoder().encode(JSON.stringify({asset:value.asset,...(!unindexed?{index:value.index,period:1}:{}),history:[[at-1,106.29],[at,106.30]]})).buffer));
    }
    if(name==='loadHistoryPeriod'&&fixtures[value.asset]?.[value.period]){
     responses.push(this.emit('451-["loadHistoryPeriodFast",{"_placeholder":true,"num":0}]'));
-    responses.push(this.emit(new TextEncoder().encode(JSON.stringify({asset:value.asset,index:value.index,period:value.period,data:fixtures[value.asset][value.period]})).buffer));
+    let rows=fixtures[value.asset][value.period];
+    if(unindexed){const shift=Math.floor((h.context.Date.now()/1000+7200)/value.period)*value.period-value.period-rows.at(-1).time;rows=rows.map(r=>({...r,time:r.time+shift}));}
+    responses.push(this.emit(new TextEncoder().encode(JSON.stringify({asset:value.asset,...(!unindexed?{index:value.index,period:value.period}:{}),data:rows})).buffer));
    }
   }
  }

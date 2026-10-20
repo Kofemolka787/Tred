@@ -196,6 +196,23 @@ class AIMarketTests(unittest.TestCase):
         result=self.ledger.poll_scan(101,{'scan_id':result['scan_id']})
         self.assertEqual(result['status'],'candidate')
 
+    def test_verified_aggregated_periods_are_not_downloaded_again_as_full_native_histories(self):
+        self.history()
+        self.ledger.settings(101, {'expiry':15})
+        with self.ledger.db() as db:
+            from market_analysis import frame_data
+            _,assets,histories=self.ledger._market(db,101)
+        periods,_,checks=frame_data(histories,'PAIR_otc',15,self.now)
+        self.assertEqual(periods,(120,600));self.assertTrue(all(c.get('history_ready') for c in checks))
+        plan=self.ledger.bridge_plan(self.token,{'code':'ready'})['plan']
+        self.assertEqual(plan['pairs'][0]['history'],[])
+        # A newly closed M2 still needs an update; complete source history
+        # permits a small refresh, rather than a redundant 160-bar download.
+        self.now+=120
+        plan=self.ledger.bridge_plan(self.token,{'code':'ready'})['plan']
+        self.assertIn({'period':120,'bars':5},plan['pairs'][0]['history'])
+        self.assertNotIn({'period':120,'bars':160},plan['pairs'][0]['history'])
+
 
     def test_one_ready_pair_among_39_has_one_small_lunaroute_request_with_complete_inventory(self):
         self.history()

@@ -29,7 +29,7 @@ async function checks(){
   assert.equal(h.requests[2].body.events[0].time,now,"No timestamp rewriting");
   let status=await h.message({action:"status"});
   assert(status.paired&&!status.needsPairing&&status.lastSeen);
-  assert.equal(status.worker_version,"0.3.12");
+  assert.equal(status.worker_version,"0.3.13");
   assert.match(status.diagnostic,/quote|Котировка/);assert.match(status.diagnostic,/30 с/);
   assert(!JSON.stringify(status).includes(token));
   assert(!JSON.stringify(h.storage).includes('"balance"'));

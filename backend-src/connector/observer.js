@@ -2,14 +2,14 @@
 // Observes data and connects the bounded read-only market scanner to the
 // existing socket. Login, cookies and outgoing auth frames are never copied.
 (() => {
-  if(window.__tredObserverVersion==="0.3.12")return;
-  window.__tredObserverVersion="0.3.12";
+  if(window.__tredObserverVersion==="0.3.13")return;
+  window.__tredObserverVersion="0.3.13";
   const Native = window.WebSocket;
   const contexts=new WeakMap();
   const number = v => typeof v === "number" && Number.isFinite(v);
   const safeSymbol = v => typeof v === "string" && /^[A-Za-z0-9][A-Za-z0-9_./ #-]{1,31}$/.test(v);
   const ts = v => number(v) ? (v > 1e11 ? v / 1000 : v) : null;
-  const emit = events => { for(let i=0;i<events.length;i+=250) window.postMessage({source:"tred-observer-v1",observer_version:"0.3.12",events:events.slice(i,i+250)},location.origin); };
+  const emit = events => { for(let i=0;i<events.length;i+=250) window.postMessage({source:"tred-observer-v1",observer_version:"0.3.13",events:events.slice(i,i+250)},location.origin); };
   const accountId = value => (typeof value === "string" || typeof value === "number" && Number.isSafeInteger(value)) && /^\d{1,20}$/.test(String(value)) && !/^0+$/.test(String(value)) ? String(value) : null;
   const idType = value => value===undefined?"none":value===null||value===""?"empty":value===0||typeof value==="string"&&/^0+$/.test(value)?"zero":accountId(value)?typeof value==="number"?"integer":"digits":Array.isArray(value)?"array":["number","string","boolean","object"].includes(typeof value)?typeof value==="string"?"text":typeof value:"other";
   const identity = async (name,data) => {
@@ -41,6 +41,28 @@
   };
   const currency = value => value == null ? null : typeof value === "string" && /^[A-Za-z]{3}$/.test(value) ? value.toUpperCase() : "unsupported";
   const historyNames=["loadHistoryPeriod","loadHistoryPeriodFast","updateHistoryNew","updateHistoryNewFast","candles","history"];
+  function historyPeriod(data,state){
+    if(Number.isInteger(data.period))return data.period;
+    const index=typeof data.index==="string"&&/^\d{1,15}$/.test(data.index)?Number(data.index):data.index;
+    const request=state.requests.get(index);
+    if(request?.asset===data.asset)return request.period;
+    // Unindexed Fast OHLC can prove its period through at least three
+    // contiguous timestamps. A single bar, ticks, gaps or mixed spacing cannot.
+    const periods=new Set();
+    for(const rows of [data.candles,data.data,data.history].filter(Array.isArray)){
+      if(!rows.length)continue;
+      const tail=rows.slice(-1600);
+      const bars=tail.map(row=>Array.isArray(row)&&row.length>=5?{time:ts(row[0]),open:row[1],close:row[2],high:row[3],low:row[4]}:
+        row&&!Array.isArray(row)?{time:ts(row.time??row.timestamp),open:row.open,close:row.close,high:row.high,low:row.low}:null);
+      if(bars.some(b=>!b||!Object.values(b).every(number)))continue;
+      if(bars.length<3)return null;
+      if(bars.some(b=>b.low<=0||b.low>Math.min(b.open,b.close)||b.high<Math.max(b.open,b.close)))return null;
+      const times=bars.map(b=>b.time).sort((a,b)=>a-b),period=times[1]-times[0];
+      if(![60,120,300,600,900].includes(period)||times.some((t,i)=>i&&t-times[i-1]!==period))return null;
+      periods.add(period);
+    }
+    return periods.size===1?[...periods][0]:null;
+  }
   function tickBars(rows){
     const ticks=rows.slice(-60000).map(r=>Array.isArray(r)&&r.length===2?{time:ts(r[0]),price:r[1]}:r&&number(r.price)?{time:ts(r.time??r.timestamp),price:r.price}:null).filter(r=>r&&number(r.time)&&number(r.price)&&r.price>0).sort((a,b)=>a.time-b.time);
     if(!ticks.length)return [];
@@ -89,8 +111,7 @@
       for (const row of data) if (Array.isArray(row) && safeSymbol(row[0]) && number(row[1]) && number(row[2]) && row[2] > 0) events.push({type:"quote",symbol:row[0],time:ts(row[1]),price:row[2],feed_id:state.feed,source_clock:"po-market-native-v1"});
     }
     if (historyNames.includes(name) && data && safeSymbol(data.asset)) {
-      const request=state.requests.get(data.index);
-      const period=Number.isInteger(data.period)?data.period:request?.asset===data.asset?request.period:null;
+      const period=historyPeriod(data,state);
       const arrays=[data.candles,data.data,data.history].filter(Array.isArray);
       const before=events.length;
       let rowCount=0,ohlcRows=0;

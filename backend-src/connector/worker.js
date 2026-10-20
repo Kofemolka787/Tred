@@ -1,6 +1,6 @@
 "use strict";
 importScripts("time-check.js","account-check.js","scan-worker.js");
-const WORKER_VERSION="0.3.12";
+const WORKER_VERSION="0.3.13";
 const endpoint=value=>{
   const u=new URL(value);
   if(u.protocol!=="https:"||!/^[a-z0-9-]+\.trycloudflare\.com$/.test(u.hostname)||u.port||u.username||u.password||u.search||u.hash||u.pathname!=="/")throw new Error("Укажи HTTPS-адрес своего TRED-туннеля.");

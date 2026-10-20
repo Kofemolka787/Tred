@@ -5,14 +5,14 @@ from pathlib import Path
 import zipfile
 
 ROOT=Path(__file__).resolve().parent
-FILES=("backend.py","telegram_auth.py","trading_core.py","market_analysis.py","signal_sessions.py","market_feed.py","market_scanner.py","check_market_scan.js","test_ai_market.py","check_ai_scan_ui.py","ai_market.py","ai_provider.py","ai_decision.py","test_ai_decision.py","ai_response.py","test_ai_response.py","check_ai_stream_http.py","openai_errors.py","configure_ai.py","test_ai_provider.py","test_configure_ai.py","SETUP-AI.cmd","SETUP-LUNAROUTE.cmd","test_market_feed.py","check_market_pipeline.js","check_quote_recovery.py","check_market_feed_ui.py","free_start.py",
+FILES=("backend.py","telegram_auth.py","trading_core.py","market_analysis.py","signal_sessions.py","market_feed.py","market_scanner.py","check_market_scan.js","test_ai_market.py","check_ai_scan_ui.py","ai_market.py","ai_provider.py","ai_decision.py","test_ai_decision.py","ai_response.py","test_ai_response.py","check_ai_stream_http.py","openai_errors.py","configure_ai.py","test_ai_provider.py","test_configure_ai.py","SETUP-AI.cmd","SETUP-LUNAROUTE.cmd","test_market_feed.py","check_market_pipeline.js","check_quote_recovery.py","check_fast_collection.py","check_market_feed_ui.py","free_start.py",
        "requirements-web.txt","START-WINDOWS.cmd","START-LINUX.sh","CONNECT-RU.md",
        "test_backend.py","test_support.py","test_trading_core.py","test_market_analysis.py","test_signal_sessions.py","check_signal_ui.py","check_connector.js",
        "package_backend.py","test_windows_package.py","windows_setup.py","test_windows_setup.py",
        "tunnel_check.py","test_tunnel_check.py","test_free_start.py","check_connector_worker.js","check_connector_http.py","check_pairing_ui.py","check_connector_popup.py","check_data_client.js","check_terminal_ui.py","check_device_sync.py")
 CONNECTOR=("market-scan.js","scan-worker.js","manifest.json","observer.js","balance-read.js","relay.js","worker.js","time-check.js","account-check.js","popup.html","popup.css","popup.js")
 WEB=("index.html","styles.css","app.js","signals.js","data-client.js","app-config.json")
-VERSION="0.3.21"
+VERSION="0.3.22"
 
 
 def windows_batch(data):

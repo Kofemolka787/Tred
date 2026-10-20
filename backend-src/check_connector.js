@@ -120,6 +120,17 @@ setImmediate(async()=>{
   assert.equal(sent.length,0);
   forwarded=[];
   const fast=new sandbox.window.WebSocket('wss://api-eu.po.market/socket.io/');
+  const start=Math.floor(Date.now()/900000)*900-9000;
+  const ohlc=Array.from({length:5},(_,i)=>({time:start+i*300,open:1.1,close:1.2,high:1.3,low:1.0}));
+  await fast.emit('42'+JSON.stringify(['loadHistoryPeriodFast',{asset:'EURUSD',data:ohlc}]));
+  let inferred=forwarded.flatMap(x=>x.events).filter(e=>e.type==='candle');
+  assert.equal(inferred.length,5);assert(inferred.every(e=>e.period===300),'Unindexed OHLC proves its own period with contiguous timestamps');
+  assert.deepEqual(inferred.map(e=>e.time),ohlc.map(e=>e.time),'Original timestamps are retained');
+  for(const rows of [ohlc.slice(0,1),ohlc.slice(0,2),ohlc.filter((_,i)=>i!==2),[...ohlc.slice(0,3),ohlc[2]],ohlc.map((r,i)=>i===0?{...r,low:2}:r)]){
+    forwarded=[];await fast.emit('42'+JSON.stringify(['loadHistoryPeriodFast',{asset:'EURUSD',data:rows}]));
+    assert(!forwarded.flatMap(x=>x.events).some(e=>e.type==='candle'),'Ambiguous, gapped, repeated or invalid OHLC cannot infer a period');
+  }
+  forwarded=[];
   const request='42'+JSON.stringify(["loadHistoryPeriod",{asset:"EURUSD",period:300,index:123,offset:160,time:Date.now()/1000}]);
   fast.send(request);
   fast.send('42["auth",{"session":"fixture-local-auth-never-forward"}]');

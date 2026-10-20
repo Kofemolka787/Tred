@@ -11,8 +11,8 @@ assert.equal(scanner.plan({...plan,pairs:[{...plan.pairs[0],history:[{period:1,b
 assert.equal(scanner.plan(plan).code,'ready');
 const tick=()=>{now+=400;const tasks=timers;timers=[];for(const fn of tasks)fn();};
 for(let i=0;i<20;i++)tick();
-assert.equal(sent.length,3,'Paced subscription and at most two unanswered histories, no commands for a closed instrument');
-assert.deepEqual(sent.map(f=>f[0]),['subfor','loadHistoryPeriod','loadHistoryPeriod']);
+assert.equal(sent.length,2,'One outstanding history per instrument; a closed instrument sends nothing');
+assert.deepEqual(sent.map(f=>f[0]),['subfor','loadHistoryPeriod']);
 assert(sent.slice(1).every(f=>f[1].time>=1800007200&&f[1].time%f[1].period===0));
 scanner.plan({...plan,until:now/1000+15,pairs:[...plan.pairs,{symbol:'CCC',feed_id:feed,quote:false,history:[{period:60,bars:160}]}]});
 for(let i=0;i<2;i++)tick();
@@ -33,8 +33,22 @@ assert(Math.abs(probe.time-(now/1000+7200))<3,'A tick request ends at current na
 scanner.received(second,{asset:'AAA',index:probe.index},1);
 scanner.quoted(second,'AAA',now/1000+7200);
 const quiet=sent.length;for(let i=0;i<12;i++)tick();assert.equal(sent.length,quiet,'Fresh observed ticks stop unnecessary probes');
-for(let i=0;i<55;i++){if(i%10===0)scanner.plan({...recovery,until:now/1000+15});tick();}
+for(let i=0;i<85;i++){if(i%10===0)scanner.plan({...recovery,until:now/1000+15});tick();}
 assert(sent.filter(f=>f[0]==='subfor').length>=2,'A failed or silent subscription must be retried');
 assert(sent.filter(f=>f[0]==='loadHistoryPeriod').length>=2,'Quote probes resume only when prices stop');
 scanner.close(second.feed);scanner.stop();
-console.log(JSON.stringify({ok:true,pacing_and_history_concurrency:true,unvisited_pairs_not_starved:true,closed_unknown_sockets_do_not_send:true,only_read_only_market_requests:true,native_clock_request_boundaries:true}));
+sent=[];timers=[];
+const third={feed:'33333333-3333-4333-8333-333333333333',catalog:new Map([['AAA',{is_open:true}],['CCC',{is_open:true}]]),requests:new Map()};
+scanner.attach({readyState:1},third,frame=>sent.push(JSON.parse(frame.slice(2))));
+scanner.plan({...plan,until:now/1000+15,pairs:['AAA','CCC'].map(symbol=>({symbol,feed_id:third.feed,quote:false,history:[{period:60,bars:160},{period:300,bars:160}]}))});
+for(let i=0;i<4;i++)tick();
+assert.equal(sent.filter(f=>f[0]==='loadHistoryPeriod').length,2,'Both slots can serve different instruments');
+const first=sent.find(f=>f[0]==='loadHistoryPeriod')[1];
+scanner.received(third,{asset:first.asset},300);
+const beforeWrong=sent.length;tick();assert.equal(sent.length,beforeWrong,'A different period cannot free the pending slot');
+scanner.received(third,{asset:first.asset},60);
+tick();assert.equal(sent.length,beforeWrong+1,'A response without index but verified symbol/period frees the slot immediately');
+const next=sent.at(-1)[1];scanner.received(third,{asset:next.asset,index:String(next.index)},next.period);
+tick();
+scanner.close(third.feed);scanner.stop();
+console.log(JSON.stringify({ok:true,pacing_and_history_concurrency:true,unvisited_pairs_not_starved:true,unindexed_verified_period_frees_slot:true,one_pending_request_per_instrument:true,closed_unknown_sockets_do_not_send:true,only_read_only_market_requests:true,native_clock_request_boundaries:true}));

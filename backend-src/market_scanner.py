@@ -54,11 +54,16 @@ class MarketScanner:
                 if not a.get("catalog_feed") or not a.get("feed_connected"):
                     continue
                 frames, bars, checks = frame_data(histories, a["symbol"], prefs["expiry"], now)
-                if not all(c.get("history_ready") for c in checks):
+                usable = all(c.get("history_ready") for c in checks)
+                effective = dict(zip(frames, bars)) if usable else {}
+                if not usable:
                     frames = PERIODS[prefs["expiry"]]
                 needed = []
                 for period in frames:
-                    data = histories.get((a["symbol"], period), [])
+                    # frame_data can already supply complete M2/M10 etc. from
+                    # contiguous lower-period bars. Reuse that verified history
+                    # instead of repeatedly fetching a new 160-bar native copy.
+                    data = effective.get(period, histories.get((a["symbol"], period), []))
                     closed = math.floor(now / period) * period - period
                     tail = data[-160:]
                     complete = len(tail) >= 80 and all(b["time"] - x["time"] == period for x, b in zip(tail, tail[1:]))

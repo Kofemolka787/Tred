@@ -2,13 +2,13 @@
 // Only read-only market requests on an already-open native Pocket socket.
 // No login, account mutation, chart switch, order or credential API exists here.
 (()=>{
-  const VERSION="0.3.12";
+  const VERSION="0.3.13";
   if(window.__tredMarketScanner?.version===VERSION)return;
   window.__tredMarketScanner?.stop();
   const sockets=new Map(),attempts=new Map(),pending=new Map();
   const pair=v=>typeof v==="string"&&/^[A-Za-z0-9][A-Za-z0-9_./ #-]{1,31}$/.test(v);
   const feed=v=>typeof v==="string"&&/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(v);
-  let wanted=[],until=0,offset=0,timer=null,index=Math.floor(Date.now()/10),stopped=false;
+  let wanted=[],until=0,offset=0,timer=null,index=Math.floor(Date.now()/10),stopped=false,turn=0;
   const key=t=>t.feed_id+":"+t.symbol+":"+t.period;
   function schedule(){if(!stopped&&!timer&&wanted.length&&Date.now()/1000<until)timer=setTimeout(()=>{timer=null;tick();},400);}
   function tick(){
@@ -17,13 +17,25 @@
     for(const [id,t] of pending)if(now-t.at>8)pending.delete(id);
     // Unvisited work wins over retries, so one unsupported instrument cannot
     // keep the rest of a large catalog waiting forever.
-    for(const task of [...wanted].sort((a,b)=>(attempts.get(key(a))||0)-(attempts.get(key(b))||0))){
+    const sorted=[...wanted].sort((a,b)=>(attempts.get(key(a))||0)-(attempts.get(key(b))||0));
+    const quotes=sorted.filter(t=>t.period===1),other=sorted.filter(t=>t.period!==1);
+    // Share the paced request budget between quotes and other work. Repeated
+    // silent subscriptions or candle refreshes cannot consume every turn.
+    const tasks=turn++%2?[...other,...quotes]:[...quotes,...other];
+    for(const task of tasks){
       const stream=sockets.get(task.feed_id);
       if(!stream||stream.socket.readyState!==1||!stream.state.catalog.get(task.symbol)?.is_open)continue;
       const taskKey=key(task),last=attempts.get(taskKey)||0;
-      if(task.period<=1&&now-(stream.quotes.get(task.symbol)||0)<=8)continue;
-      if(now-last<12||[...pending.values()].some(p=>p.key===taskKey))continue;
+      // Give the normal subscription its first chance before spending a
+      // fallback tick request. A working stream needs no polling probe.
+      if(task.period===1&&!attempts.has(key({...task,period:0})))continue;
+      if((task.period===1||task.period===0&&last)&&now-(stream.quotes.get(task.symbol)||0)<=8)continue;
+      if(now-last<(task.period===0?30:12)||[...pending.values()].some(p=>p.key===taskKey))continue;
+      // Replies without an index must never be confused with another request
+      // for this same instrument. Other instruments still use both slots.
+      if(task.period!==0&&[...pending.values()].some(p=>p.feed_id===task.feed_id&&p.asset===task.symbol))continue;
       if(task.period!==0&&pending.size>=2)continue;
+      if(quotes.length&&task.period!==0&&[...pending.values()].some(p=>(p.period===1)===(task.period===1)))continue;
       try{
         if(task.period===0){
           stream.send('42'+JSON.stringify(["subfor",task.symbol]));
@@ -64,10 +76,25 @@
   function attach(socket,state,send){sockets.set(state.feed,{socket,state,send,quotes:new Map()});}
   function quoted(state,symbol,time){
     const at=time-offset,now=Date.now()/1000,stream=sockets.get(state.feed);
-    if(stream&&Number.isFinite(at)&&at>=now-10&&at<=now+5)stream.quotes.set(symbol,at);
+    if(stream&&Number.isFinite(at)&&at>=now-10&&at<=now+5){
+      stream.quotes.set(symbol,at);
+      // A genuine fresh tick satisfies a quote probe, even if its response
+      // carries neither the requested index nor a period.
+      for(const [id,p] of pending)if(p.feed_id===state.feed&&p.asset===symbol&&p.period===1)pending.delete(id);
+    }
   }
   function received(state,data,period){
-    if(Number.isSafeInteger(data.index)){const p=pending.get(data.index);if(p?.feed_id===state.feed&&p.asset===data.asset&&p.period===period)pending.delete(data.index);}
+    const id=typeof data.index==="string"&&/^\d{1,15}$/.test(data.index)?Number(data.index):data.index;
+    if(Number.isSafeInteger(id)){
+      const p=pending.get(id);
+      if(p?.feed_id===state.feed&&p.asset===data.asset&&p.period===period)pending.delete(id);
+      return;
+    }
+    if(data.index!==undefined&&data.index!==null)return;
+    // Explicit or independently verified candle spacing identifies the
+    // period; never infer it from a pending request or the active chart.
+    const matches=[...pending].filter(([,p])=>p.feed_id===state.feed&&p.asset===data.asset&&p.period===period);
+    if(matches.length===1)pending.delete(matches[0][0]);
   }
   function close(id){sockets.delete(id);for(const [index,p] of pending)if(p.feed_id===id)pending.delete(index);}
   function stop(){stopped=true;clearTimeout(timer);timer=null;wanted=[];}
