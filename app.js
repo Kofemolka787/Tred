@@ -201,7 +201,7 @@ $("#open-pocket").addEventListener("click", () => {
 $("#request-signal").addEventListener("click", async () => {
   if (!authorized || busy) return;
   if (current.mode === "device") { $("#connect-dialog").showModal(); return; }
-  if(current.market_data_version!==3){notify("Обнови сервер до 0.3.17 — инструкция в кабинете.");return;}
+  if(current.market_data_version!==3){notify("Обнови сервер до 0.3.18 — инструкция в кабинете.");return;}
   const ticket={cancelled:false,client:dataClient,generation:connectGeneration,id:null};activeScan=ticket;
   setBusy(true);
   try {
@@ -224,7 +224,7 @@ document.addEventListener("click",async event=>{
   if(!event.target.closest("#cancel-scan")||!activeScan)return;
   const ticket=activeScan;ticket.cancelled=true;
   try{if(ticket.id&&ticket.client===dataClient){const result=await api("/api/scan/cancel",{scan_id:ticket.id});if(ticket.client===dataClient){current=result.state;render();window.TredSignals.show({status:"cancelled",reason:"Проверка остановлена."});}}}
-  catch(_){notify("Проверка закрыта. Уже отправленный запрос OpenAI может завершиться.");}
+  catch(_){notify("Проверка закрыта. Уже отправленный запрос ИИ может завершиться.");}
   finally{if(activeScan===ticket){activeScan=null;setBusy(false);text("#request-signal strong","ПОЛУЧИТЬ СИГНАЛ");}}
 });
 async function bootstrap() {

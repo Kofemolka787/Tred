@@ -5,6 +5,7 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
+from urllib.error import HTTPError
 
 from ai_market import OpenAIAnalyzer, AIError, snapshot, validate
 from configure_ai import save
@@ -157,6 +158,28 @@ class AIMarketTests(unittest.TestCase):
         self.assertEqual(result['batches'], 4)
         self.assertEqual({p['symbol'] for c in calls for p in c['pairs']}, {p['symbol'] for p in pairs})
         self.assertTrue(all(len(c['pairs'])<=16 for c in calls))
+
+    def test_429_provider_codes_reach_scan_result_without_provider_secrets(self):
+        self.history()
+        secret = 'fixture-private-provider-message-do-not-expose'
+        save(self.tmp.name, 'fixture-openai-key-for-error-check', allowed_users=[101])
+        for code, marker in [('insufficient_quota', 'API-квота исчерпана'), ('rate_limit_exceeded', 'временный лимит')]:
+            with self.subTest(code=code):
+                def opener(request, timeout):
+                    payload = {'error': {'code':code, 'message':secret}}
+                    raise HTTPError(request.full_url, 429, secret, {}, io.BytesIO(json.dumps(payload).encode()))
+                analyzer = OpenAIAnalyzer(self.tmp.name, opener=opener)
+                self.addCleanup(analyzer.executor.shutdown)
+                self.ledger.ai = analyzer
+                self.now += 3
+                job = self.ledger.start_scan(101)
+                analyzer.get(job['scan_id']).exception(timeout=2)
+                result = self.ledger.poll_scan(101, {'scan_id':job['scan_id']})
+                self.assertEqual(result['status'], 'ai_unavailable')
+                self.assertIn(marker, result['reason'])
+                self.assertIn(code, result['reason'])
+                self.assertNotIn(secret, json.dumps(result))
+                self.assertNotIn('fixture-openai-key-for-error-check', json.dumps(result))
 
 
 if __name__ == '__main__': unittest.main()

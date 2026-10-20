@@ -9,6 +9,7 @@ from unittest.mock import patch
 from urllib.error import HTTPError
 
 from configure_ai import main, read_key, read_model, save, verify_key
+from openai_errors import http_error_message
 from trading_core import Ledger
 
 KEY = "fixture-visible-input-not-a-real-key"
@@ -69,6 +70,23 @@ class ConfigureAITests(unittest.TestCase):
                     verify_key(KEY, 'gpt-5-mini')
                 self.assertIn(f'HTTP {status}', str(caught.exception))
                 self.assertNotIn(KEY, str(caught.exception))
+
+    def test_quota_rate_and_unknown_error_bodies_are_distinguished_and_sanitized(self):
+        cases = [
+            (json.dumps({'error': {'code':'insufficient_quota','message':KEY}}).encode(), 'API-квота исчерпана'),
+            (json.dumps({'error': {'type':'rate_limit_exceeded','message':KEY}}).encode(), 'временный лимит'),
+            (json.dumps({'error': {'code':'unknown-'+KEY,'message':KEY}}).encode(), 'нельзя отличить'),
+            (json.dumps({'error': []}).encode(), 'нельзя отличить'),
+            (b'<html>gateway error</html>', 'нельзя отличить'),
+            (b'x' * 16385, 'нельзя отличить'),
+        ]
+        for body, marker in cases:
+            with self.subTest(marker=marker, size=len(body)):
+                error = HTTPError('https://api.openai.com/v1/responses', 429, KEY, {}, io.BytesIO(body))
+                message = http_error_message(error)
+                self.assertIn(marker, message)
+                self.assertIn('HTTP 429', message)
+                self.assertNotIn(KEY, message)
 
 
 if __name__ == '__main__': unittest.main()

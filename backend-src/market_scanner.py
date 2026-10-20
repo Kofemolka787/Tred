@@ -84,7 +84,7 @@ class MarketScanner:
 
     def start_scan(self, uid):
         if not self.ai.status(uid)["configured"]:
-            return {"status": "setup_required", "reason": "Для ИИ-анализа один раз запусти SETUP-AI.cmd на компьютере и введи свой API-ключ OpenAI в открывшемся окне. Ключ не нужно отправлять в Telegram. После сохранения нажми «Получить сигнал» снова."}
+            return {"status": "setup_required", "reason": "Для ИИ-анализа запусти SETUP-LUNAROUTE.cmd на компьютере и введи ключ LunaRoute локально. Для прямого OpenAI есть SETUP-AI.cmd. Ключ не нужно отправлять в Telegram. После сохранения нажми «Получить сигнал» снова."}
         with self.db() as db:
             self.setup(db, uid)
             prefs, assets, _ = self._market(db, uid)
@@ -137,7 +137,7 @@ class MarketScanner:
                         db.execute("UPDATE scan_jobs SET status='ai' WHERE id=?", (job["id"],))
                     if not future.done():
                         return {"status": "loading", "phase": "ai", "scan_id": job["id"], "deadline": job["deadline"], "progress": progress,
-                                "reason": "OpenAI сравнивает структуру, Smart Money и реакцию цены по полученным парам. Решение появится здесь автоматически; повторно нажимать кнопку не нужно."}
+                                "reason": f"{self.ai.status(uid)['provider']} сравнивает структуру, Smart Money и реакцию цены по полученным парам. Решение появится здесь автоматически; повторно нажимать кнопку не нужно."}
                     reviewed = future.result()
                     decision, original = reviewed["decision"], reviewed["snapshot"]
                     info = {k: decision[k] for k in ("provider", "model", "elapsed_ms", "reviewed_pairs", "batches")}

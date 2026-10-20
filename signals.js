@@ -108,7 +108,7 @@ window.TredSignals=(()=>{
     if(feed?.pairs?.length){suggestions.replaceChildren();for(const p of feed.pairs){const b=node("button","",`${p.symbol} · ${Math.round(p.payout*100)}%`);b.type="button";b.dataset.symbol=p.symbol;suggestions.append(b);}}
     $("#min-payout").value=state.preferences.min_payout||85;
     $("#signals-upgrade").hidden=state.mode!=="api"||state.market_data_version===3;
-    $("#ai-status").textContent=state.mode!=="api"?"ИИ подключается к твоему серверу TRED.":state.ai?.configured?`ИИ: ${state.ai.provider} · ${state.ai.model}. Ключ настроен; решение проверяется по свежим данным.`:"ИИ ещё не настроен. Запусти SETUP-AI.cmd на компьютере и введи API-ключ локально.";
+    $("#ai-status").textContent=state.mode!=="api"?"ИИ подключается к твоему серверу TRED.":state.ai?.configured?`ИИ: ${state.ai.provider} · ${state.ai.model}. Ключ настроен; решение проверяется по свежим данным.`:"ИИ ещё не настроен. Запусти SETUP-LUNAROUTE.cmd на компьютере и введи ключ LunaRoute локально.";
     const help=$("#feed-help");
     if(feed?.blocked){
       const b=feed.blocked;

@@ -1,10 +1,9 @@
-"""Real OpenAI review of market-only evidence; keys never enter the browser."""
+"""Real model review of market-only evidence; keys never enter the browser."""
 from concurrent.futures import ThreadPoolExecutor
 import json
 import math
 import os
 from pathlib import Path
-import re
 import threading
 import time
 from urllib.error import HTTPError, URLError
@@ -12,6 +11,8 @@ from urllib.request import Request, urlopen
 
 from market_analysis import frame_data, rank
 from market_scanner import pool
+from openai_errors import http_error_message
+from ai_provider import load_config, response_body, response_text
 
 SYSTEM = """Ты — аналитик TRED. Принимай решение на русском по Smart Money и структуре цены.
 Сравни все переданные инструменты: подтверждённые HH/HL либо LH/LL, BOS, предполагаемые
@@ -43,43 +44,22 @@ class AIError(ValueError):
 
 
 class OpenAIAnalyzer:
-    def __init__(self, directory, *, opener=urlopen, endpoint="https://api.openai.com/v1/responses"):
+    def __init__(self, directory, *, opener=urlopen, endpoint=None):
         self.directory, self.opener, self.endpoint = Path(directory), opener, endpoint
         self.executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="tred-ai")
         self.tasks, self.lock = {}, threading.Lock()
 
     def config(self):
-        value = {}
-        path = self.directory / "ai-settings.json"
-        if path.is_file():
-            try:
-                if path.stat().st_size < 8192:
-                    value = json.loads(path.read_text(encoding="utf-8"))
-                    if not isinstance(value, dict):
-                        value = {}
-            except (OSError, ValueError):
-                pass
-        key = os.environ.get("OPENAI_API_KEY") or value.get("api_key", "")
-        model = os.environ.get("OPENAI_MODEL") or value.get("model", "gpt-5-mini")
-        if not isinstance(key, str) or not 20 <= len(key) <= 2048 or any(ord(c) < 33 for c in key):
-            key = ""
-        if not isinstance(model, str) or not re.fullmatch(r"[A-Za-z0-9._:-]{1,80}", model):
-            model = "gpt-5-mini"
-        return key, model
+        value = load_config(self.directory)
+        return value["api_key"], value["model"]
 
     def status(self, uid=None):
-        key, model = self.config()
-        allowed = []
-        try:
-            path = self.directory / "ai-settings.json"
-            if path.is_file() and path.stat().st_size < 8192:
-                allowed = json.loads(path.read_text(encoding="utf-8")).get("allowed_users", [])
-        except (OSError, ValueError, AttributeError):
-            pass
+        value = load_config(self.directory)
+        allowed = value["allowed_users"]
         if os.environ.get("TRED_AI_ALLOWED_USERS"):
             allowed = [int(v) for v in os.environ["TRED_AI_ALLOWED_USERS"].split(",") if v.strip().isdigit()]
         authorized = uid is None or isinstance(allowed, list) and uid in allowed
-        return {"configured": bool(key) and authorized, "provider": "OpenAI", "model": model, "market_only": True}
+        return {"configured": bool(value["api_key"] and value["model"]) and authorized, "provider": value["name"], "model": value["model"], "market_only": True}
 
     def submit(self, job_id, snapshot):
         with self.lock:
@@ -99,6 +79,13 @@ class OpenAIAnalyzer:
             return self.tasks.get(job_id)
 
     def review(self, snapshot):
+        original = load_config(self.directory)
+        result = self._review(snapshot)
+        if load_config(self.directory) != original:
+            raise AIError("Настройки ИИ изменились во время анализа. Запроси новый анализ.")
+        return result
+
+    def _review(self, snapshot):
         started = time.monotonic()
         if len(snapshot["pairs"]) <= 16:
             return {**self._review_chunk(snapshot), "reviewed_pairs": len(snapshot["pairs"]), "batches": 1}
@@ -120,16 +107,13 @@ class OpenAIAnalyzer:
         return {**final, "reviewed_pairs": len(snapshot["pairs"]), "batches": len(chunks) + (final.get("batches", 1) if winners else 0), "elapsed_ms": round((time.monotonic() - started) * 1000)}
 
     def _review_chunk(self, snapshot):
-        key, model = self.config()
-        if not key:
-            raise AIError("Настрой OpenAI через SETUP-AI.cmd на компьютере.")
+        settings = load_config(self.directory)
+        key, model, provider = settings["api_key"], settings["model"], settings["name"]
+        if not key or not model:
+            raise AIError("Настрой ИИ через SETUP-LUNAROUTE.cmd или SETUP-AI.cmd на компьютере.")
         started = time.monotonic()
-        body = {"model": model, "store": False, "max_output_tokens": 3500,
-                "input": [{"role": "system", "content": SYSTEM}, {"role": "user", "content": json.dumps(snapshot, ensure_ascii=False, allow_nan=False)}],
-                "text": {"format": {"type": "json_schema", "name": "tred_market_decision", "strict": True, "schema": SCHEMA}}}
-        if model.startswith("gpt-5"):
-            body["reasoning"] = {"effort": "low"}
-        request = Request(self.endpoint, data=json.dumps(body).encode(), headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"})
+        body = response_body(model, [{"role": "system", "content": SYSTEM}, {"role": "user", "content": json.dumps(snapshot, ensure_ascii=False, allow_nan=False)}], SCHEMA)
+        request = Request(self.endpoint or settings["endpoint"], data=json.dumps(body).encode(), headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"})
         try:
             with self.opener(request, timeout=35) as response:
                 raw = response.read(262145)
@@ -137,21 +121,17 @@ class OpenAIAnalyzer:
                     raise AIError("ИИ вернул слишком большой ответ.")
                 reply = json.loads(raw)
         except HTTPError as e:
-            message = "Проверь API-ключ и доступ к выбранной модели OpenAI." if e.code in (401, 403, 404) else "OpenAI ограничил запросы или исчерпан API-баланс. Проверь API-аккаунт." if e.code == 429 else "OpenAI временно недоступен. Повтори запрос позже."
-            raise AIError(message) from None
+            raise AIError(http_error_message(e, provider=provider)) from None
         except (URLError, TimeoutError, OSError):
-            raise AIError("Не удалось дождаться OpenAI. Проверь интернет на компьютере.") from None
+            raise AIError(f"Не удалось дождаться {provider}. Проверь интернет на компьютере.") from None
         except (ValueError, TypeError):
-            raise AIError("Ответ OpenAI не удалось проверить.") from None
+            raise AIError(f"Ответ {provider} не удалось проверить.") from None
         try:
-            if reply.get("status") != "completed":
-                raise ValueError()
-            text = "".join(c.get("text", "") for row in reply.get("output", []) for c in row.get("content", []) if c.get("type") == "output_text")
-            decision = json.loads(text)
+            decision = json.loads(response_text(reply))
             validate(decision, snapshot)
         except (ValueError, TypeError, KeyError, AttributeError):
             raise AIError("ИИ не вернул проверяемый сценарий. Вход не предложен.") from None
-        return {**decision, "provider": "OpenAI", "model": model, "elapsed_ms": round((time.monotonic() - started) * 1000)}
+        return {**decision, "provider": provider, "model": model, "elapsed_ms": round((time.monotonic() - started) * 1000)}
 
 
 def validate(decision, snapshot):

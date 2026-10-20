@@ -4,6 +4,7 @@ The broker socket and OpenAI server are fixtures. Actual connector JavaScript,
 Responses client, signed backend and Mini App run; no external key or orders.
 """
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import argparse
 import json
 from pathlib import Path
 import subprocess
@@ -20,6 +21,11 @@ from test_support import signed_data
 from trading_core import Ledger
 
 ROOT = Path(__file__).resolve().parent
+parser=argparse.ArgumentParser()
+parser.add_argument('--provider',choices=('openai','lunaroute'),default='openai')
+provider=parser.parse_args().provider
+provider_name='LunaRoute' if provider=='lunaroute' else 'OpenAI'
+fixture_key='lr_fixture_lunaroute_key_for_local_transport_only' if provider=='lunaroute' else 'fixture-openai-api-key-never-public'
 with tempfile.TemporaryDirectory(prefix='tred-ai-scan-') as temporary:
     current = [1800000000.0]
     model_requests = []
@@ -28,6 +34,7 @@ with tempfile.TemporaryDirectory(prefix='tred-ai-scan-') as temporary:
         def do_POST(self):
             body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
             assert self.path == '/v1/responses' and body['store'] is False
+            assert self.headers['Authorization'] == 'Bearer '+fixture_key
             value = json.loads(body['input'][1]['content']); model_requests.append(value)
             assert len(value['pairs']) == 16
             assert not any(key in json.dumps(value) for key in ('account_id', 'balance', 'api_key', 'token', 'user_id'))
@@ -39,7 +46,7 @@ with tempfile.TemporaryDirectory(prefix='tred-ai-scan-') as temporary:
             self.send_response(200); self.send_header('Content-Type', 'application/json'); self.send_header('Content-Length', str(len(reply))); self.end_headers(); self.wfile.write(reply)
     model_server = ThreadingHTTPServer(('127.0.0.1', 0), Model)
     threading.Thread(target=model_server.serve_forever, daemon=True).start()
-    save(temporary, 'fixture-openai-api-key-never-public', allowed_users=[101])
+    save(temporary, fixture_key, allowed_users=[101], provider=provider)
     engine = OpenAIAnalyzer(temporary, endpoint=f'http://127.0.0.1:{model_server.server_port}/v1/responses')
     ledger = Ledger(Path(temporary)/'ledger.sqlite3', clock=lambda: current[0], ai=engine)
     token = ledger.claim(ledger.pair(101)['code'])['token']
@@ -87,6 +94,7 @@ with tempfile.TemporaryDirectory(prefix='tred-ai-scan-') as temporary:
                 expect(page.locator('#feed-coverage')).to_contain_text('Каталог: 130')
                 assert page.locator('#coverage-list > p').count() == 130
                 expect(page.locator('#ai-status')).to_contain_text('gpt-5-mini')
+                expect(page.locator('#ai-status')).to_contain_text(provider_name)
                 page.locator('#request-signal').click()
                 expect(page.locator('#signal-result')).to_contain_text('Загружаем данные всех пар')
                 command({'action':'auto'})
@@ -97,6 +105,7 @@ with tempfile.TemporaryDirectory(prefix='tred-ai-scan-') as temporary:
                 assert state['feed']['ready'] == 16, [(p['symbol'],p['bars'],p['reason']) for p in state['feed']['pairs'][:16]]
                 expect(page.locator('#signal-result h2')).to_contain_text('PAIR0_otc', timeout=15000)
                 expect(page.locator('#signal-result')).to_contain_text('ИИ-СЦЕНАРИЙ')
+                expect(page.locator('#signal-result')).to_contain_text(provider_name)
                 expect(page.locator('#signal-result')).to_contain_text('рассмотрено пар: 16')
                 expect(page.locator('#close-preview')).to_contain_text('завершение примерно')
                 assert len(model_requests) == 1
@@ -110,14 +119,14 @@ with tempfile.TemporaryDirectory(prefix='tred-ai-scan-') as temporary:
                 expect(page.locator('#live-sessions')).to_contain_text('До завершения')
                 assert ledger.state({'id':101})['accounts'][0]['balance'] == '94.00'
                 assert ledger.state({'id':202})['signal_sessions'] == []
-                assert 'fixture-openai-api-key' not in page.content()
+                assert fixture_key not in page.content()
                 assert not errors, errors
                 (ROOT/'artifacts').mkdir(exist_ok=True)
                 page.screenshot(path=str(ROOT/'artifacts/ai-scan-mobile.png'), full_page=True)
-                report = {'ok':True, 'catalog_130_not_truncated':True, 'all_16_eligible_pairs_auto_requested':True, 'one_click_waits_for_history_then_ai':True,
+                report = {'ok':True, 'provider':provider_name, 'catalog_130_not_truncated':True, 'all_16_eligible_pairs_auto_requested':True, 'one_click_waits_for_history_then_ai':True,
                           'actual_responses_client_with_fixture_provider':True, 'market_only_payload':True, 'key_absent_from_browser':True,
                           'entry_time_and_duration_visible':True, 'no_order_or_chart_switch_requests':True, 'balance_unchanged':True, 'other_user_isolated':True,
-                          'page_errors':errors, 'native_broker_or_real_openai_service_verified':False}
+                          'page_errors':errors, 'native_broker_or_real_provider_service_verified':False}
                 (ROOT/'artifacts/ai-scan-check.json').write_text(json.dumps(report,indent=2)+'\n'); print(json.dumps(report))
             finally: browser.close()
     finally:
