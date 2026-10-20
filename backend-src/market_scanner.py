@@ -156,7 +156,7 @@ class MarketScanner:
                         else:
                             result["reason"] = "Пока ИИ анализировал данные, цена или закрытые свечи изменились. Старый вход пропущен; запроси новый анализ."
                 except AIError as error:
-                    result = {"status": "ai_unavailable", "reason": str(error)}
+                    result = {"status": "ai_unavailable", "reason": str(error), 'ai_error_code':error.code}
                 except Exception:
                     result = {"status": "ai_unavailable", "reason": "Ответ ИИ не прошёл проверку. Вход не предложен; повтори запрос позже."}
             else:

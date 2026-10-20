@@ -194,4 +194,26 @@ class AIMarketTests(unittest.TestCase):
         self.assertEqual(result['status'],'candidate')
 
 
+    def test_one_ready_pair_among_39_has_one_small_lunaroute_request_with_complete_inventory(self):
+        self.history()
+        with self.ledger.db() as db:prefs,assets,histories=self.ledger._market(db,101)
+        rows=[{**assets[0],'symbol':f'PAIR{i}_otc','quote_time':self.now if i==0 else self.now-30} for i in range(39)]
+        bars={(a['symbol'],period):histories[('PAIR_otc',period)] for a in rows for period in (60,300)}
+        value,_=snapshot(rows,bars,prefs,self.now)
+        self.assertEqual(sum(p['data_ready'] for p in value['pairs']),1)
+        self.assertLess(len(json.dumps(value,ensure_ascii=False).encode()),45000)
+        self.assertFalse(any('recent_ohlc' in f for p in value['pairs'][1:] for f in p['frames']))
+        calls=[]
+        def opener(request,timeout):
+            body=json.loads(request.data);v=json.loads(body['input'][1]['content']);calls.append(v)
+            self.assertTrue(body['stream']);self.assertEqual(len(v['pairs']),39)
+            d=FixtureAI().submit(1,v).result()['decision'];d={k:d[k] for k in ('action','symbol','direction','summary','risk','evidence')}
+            return io.BytesIO(json.dumps({'status':'completed','output':[{'content':[{'type':'output_text','text':json.dumps(d)}]}]}).encode())
+        save(self.tmp.name,'lr_fixture_small_payload_for_39_pairs',allowed_users=[101],provider='lunaroute')
+        ai=OpenAIAnalyzer(self.tmp.name,opener=opener);self.addCleanup(ai.executor.shutdown)
+        result=ai.review(value)
+        self.assertEqual(result['reviewed_pairs'],39);self.assertEqual(len(calls),1)
+        self.assertEqual(result['action'],'enter')
+
+
 if __name__ == '__main__': unittest.main()

@@ -17,7 +17,7 @@ from ai_market import OpenAIAnalyzer
 from backend import handler
 from configure_ai import save
 from test_market_analysis import fixture
-from test_support import signed_data
+from test_support import signed_data, FixtureAI
 from trading_core import Ledger
 
 ROOT = Path(__file__).resolve().parent
@@ -36,14 +36,16 @@ with tempfile.TemporaryDirectory(prefix='tred-ai-scan-') as temporary:
             assert self.path == '/v1/responses' and body['store'] is False
             assert self.headers['Authorization'] == 'Bearer '+fixture_key
             value = json.loads(body['input'][1]['content']); model_requests.append(value)
-            assert len(value['pairs']) == 16
+            assert 0 < len(value['pairs']) <= 64
             assert not any(key in json.dumps(value) for key in ('account_id', 'balance', 'api_key', 'token', 'user_id'))
-            chosen = next(p for p in value['pairs'] if p['symbol'] == 'PAIR0_otc')
-            decision = {'action': 'enter', 'symbol': 'PAIR0_otc', 'direction': 'up', 'summary': 'Рост структуры согласован на двух периодах; цена вернулась к зоне после импульса.',
-                        'risk': 'Вход отменяется при потере зоны; OTC не даёт данных о биржевых заявках.',
-                        'evidence': [{'symbol': 'PAIR0_otc', 'period': f['period'], 'time': f['bar_time'], 'explanation': 'Повышающиеся экстремумы и реакция на подтверждённую зону.'} for f in chosen['frames']]}
+            decision=FixtureAI().submit(1,value).result()['decision']
+            decision={k:decision[k] for k in ('action','symbol','direction','summary','risk','evidence')}
             reply = json.dumps({'status': 'completed', 'output': [{'type': 'message', 'content': [{'type': 'output_text', 'text': json.dumps(decision, ensure_ascii=False)}]}]}).encode()
-            self.send_response(200); self.send_header('Content-Type', 'application/json'); self.send_header('Content-Length', str(len(reply))); self.end_headers(); self.wfile.write(reply)
+            content_type='application/json'
+            if body.get('stream'):
+                content_type='text/event-stream'
+                reply=('data: '+json.dumps({'type':'response.created'})+'\n\n'+'data: '+json.dumps({'type':'response.completed','response':json.loads(reply)})+'\n\n').encode()
+            self.send_response(200); self.send_header('Content-Type', content_type); self.send_header('Content-Length', str(len(reply))); self.end_headers(); self.wfile.write(reply)
     model_server = ThreadingHTTPServer(('127.0.0.1', 0), Model)
     threading.Thread(target=model_server.serve_forever, daemon=True).start()
     save(temporary, fixture_key, allowed_users=[101], provider=provider)
@@ -108,7 +110,7 @@ with tempfile.TemporaryDirectory(prefix='tred-ai-scan-') as temporary:
                 expect(page.locator('#signal-result')).to_contain_text(provider_name)
                 expect(page.locator('#signal-result')).to_contain_text('рассмотрено пар: 16')
                 expect(page.locator('#close-preview')).to_contain_text('завершение примерно')
-                assert len(model_requests) == 1
+                assert {pair['symbol'] for request in model_requests for pair in request['pairs']}=={f'PAIR{i}_otc' for i in range(16)}
                 generated = command({'action':'outgoing'})['frames']
                 assert {f[0] for f in generated} == {'subfor','loadHistoryPeriod'}
                 assert len({f[1]['asset'] for f in generated if f[0]=='loadHistoryPeriod'}) == 16
