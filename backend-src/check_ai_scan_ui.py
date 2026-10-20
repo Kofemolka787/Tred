@@ -29,6 +29,7 @@ fixture_key='lr_fixture_lunaroute_key_for_local_transport_only' if provider=='lu
 with tempfile.TemporaryDirectory(prefix='tred-ai-scan-') as temporary:
     current = [1800000000.0]
     model_requests = []
+    model_mode = ['valid']
     class Model(BaseHTTPRequestHandler):
         def log_message(self, *_): pass
         def do_POST(self):
@@ -40,7 +41,8 @@ with tempfile.TemporaryDirectory(prefix='tred-ai-scan-') as temporary:
             assert not any(key in json.dumps(value) for key in ('account_id', 'balance', 'api_key', 'token', 'user_id'))
             decision=FixtureAI().submit(1,value).result()['decision']
             decision={k:decision[k] for k in ('action','symbol','direction','summary','risk','evidence')}
-            reply = json.dumps({'status': 'completed', 'output': [{'type': 'message', 'content': [{'type': 'output_text', 'text': json.dumps(decision, ensure_ascii=False)}]}]}).encode()
+            text='```json\n'+json.dumps(decision, ensure_ascii=False)+'\n```' if model_mode[0]=='valid' else 'fixture-private-malformed-response'
+            reply = json.dumps({'status': 'completed', 'output': [{'type': 'message', 'content': [{'type': 'output_text', 'text': text}]}]}).encode()
             content_type='application/json'
             if body.get('stream'):
                 content_type='text/event-stream'
@@ -122,12 +124,21 @@ with tempfile.TemporaryDirectory(prefix='tred-ai-scan-') as temporary:
                 assert ledger.state({'id':101})['accounts'][0]['balance'] == '94.00'
                 assert ledger.state({'id':202})['signal_sessions'] == []
                 assert fixture_key not in page.content()
+                # A completed but malformed model response has its own safe UI
+                # diagnostic, separate from a genuine wait or transport outage.
+                model_mode[0]='malformed';current[0]+=3
+                page.locator('#request-signal').click()
+                expect(page.locator('#signal-result')).to_contain_text('Ответ ИИ не прошёл проверку',timeout=15000)
+                expect(page.locator('#signal-result')).to_contain_text('Код проверки: decision_json')
+                assert 'fixture-private-malformed-response' not in page.content()
+                assert fixture_key not in page.content()
                 assert not errors, errors
                 (ROOT/'artifacts').mkdir(exist_ok=True)
                 page.screenshot(path=str(ROOT/'artifacts/ai-scan-mobile.png'), full_page=True)
                 report = {'ok':True, 'provider':provider_name, 'catalog_130_not_truncated':True, 'all_16_eligible_pairs_auto_requested':True, 'one_click_waits_for_history_then_ai':True,
                           'actual_responses_client_with_fixture_provider':True, 'market_only_payload':True, 'key_absent_from_browser':True,
                           'entry_time_and_duration_visible':True, 'no_order_or_chart_switch_requests':True, 'balance_unchanged':True, 'other_user_isolated':True,
+                          'completed_fenced_json_with_evidence_refs_accepted':True, 'malformed_response_has_specific_safe_ui_error':True,
                           'page_errors':errors, 'native_broker_or_real_provider_service_verified':False}
                 (ROOT/'artifacts/ai-scan-check.json').write_text(json.dumps(report,indent=2)+'\n'); print(json.dumps(report))
             finally: browser.close()

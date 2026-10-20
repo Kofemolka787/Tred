@@ -15,6 +15,16 @@ def signed_data(key, user_id=101, *, stamp=None, first_name="Тест", bot_id=B
     fields["hash"] = "unused-in-ed25519-test"
     return urlencode(fields)
 
+def wire_decision(decision, payload):
+    """Synthetic provider output uses the actual request's evidence IDs."""
+    value = {k: decision[k] for k in ('action', 'symbol', 'direction', 'summary', 'risk', 'evidence')}
+    if 'evidence_refs' in payload:
+        refs = {(r['symbol'], r['period'], r['time']): r['ref'] for r in payload['evidence_refs']}
+        value['evidence'] = [{'ref': refs[(e['symbol'], e['period'], e['time'])],
+                              'explanation': e['explanation']} for e in decision['evidence']]
+    return value
+
+
 class FixtureAI:
     """Structured model contract fixture; never contacts an AI provider."""
     def __init__(self):
@@ -39,6 +49,8 @@ class FixtureAI:
             decision = {"action": "enter" if selected else "wait", "symbol": selected["symbol"] if selected else "", "direction": selected["direction"] if selected else "none",
                         "summary": "Согласованная структура и подтверждённая реакция." if selected else "Нет подтверждённой реакции на зону.", "risk": "На OTC наблюдаются только цены брокера; результат не гарантирован.", "evidence": evidence,
                         "provider": "OpenAI", "model": "fixture-model", "elapsed_ms": 1, "reviewed_pairs": len(snapshot["pairs"]), "batches": 1}
+            if 'evidence_refs' in snapshot:
+                decision = {**decision, **wire_decision(decision, snapshot)}
             future.set_result({"snapshot": snapshot, "decision": decision})
             self.tasks[job_id] = future
         return self.tasks[job_id]

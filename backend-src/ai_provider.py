@@ -53,7 +53,36 @@ def response_body(model, inputs, schema, *, name="tred_market_decision", max_tok
     return body
 
 
+class ModelReplyError(ValueError):
+    def __init__(self, code, message):
+        super().__init__(message + ' Вход не предложен.')
+        self.code = code
+
+
 def response_text(reply):
     if not isinstance(reply, dict) or reply.get("status") != "completed":
-        raise ValueError("Incomplete model response")
-    return "".join(c.get("text", "") for row in reply.get("output", []) for c in row.get("content", []) if c.get("type") == "output_text")
+        raise ModelReplyError('model_incomplete', 'Провайдер не подтвердил завершение ответа модели.')
+    output = reply.get('output')
+    if not isinstance(output, list):
+        raise ModelReplyError('model_format', 'Провайдер вернул неподдерживаемую оболочку ответа.')
+    texts = []
+    for row in output:
+        if not isinstance(row, dict):
+            raise ModelReplyError('model_format', 'Провайдер вернул неподдерживаемую оболочку ответа.')
+        if row.get('type', 'message') != 'message':
+            continue
+        content = row.get('content', [])
+        if not isinstance(content, list):
+            raise ModelReplyError('model_format', 'Провайдер вернул неподдерживаемую оболочку ответа.')
+        for item in content:
+            if not isinstance(item, dict):
+                raise ModelReplyError('model_format', 'Провайдер вернул неподдерживаемую оболочку ответа.')
+            if item.get('type') == 'refusal':
+                raise ModelReplyError('model_refusal', 'Модель отказалась формировать сценарий.')
+            if item.get('type') == 'output_text':
+                if not isinstance(item.get('text'), str):
+                    raise ModelReplyError('model_format', 'Провайдер вернул неподдерживаемую оболочку ответа.')
+                texts.append(item['text'])
+    if not texts or not ''.join(texts).strip():
+        raise ModelReplyError('model_empty', 'В завершённом ответе модели нет текста сценария.')
+    return ''.join(texts)

@@ -64,8 +64,10 @@ window.TredSignals=(()=>{
     chosen=result.status==="candidate"?result:null;
     const host=$("#signal-result");host.replaceChildren();host.hidden=false;
     if(!chosen){
-      const title=result.status==="loading"?(result.phase==="ai"?"ИИ анализирует рынок":result.phase==="quotes"?"Получаем текущие цены":"Загружаем данные всех пар"):result.status==="setup_required"?"Подключи ИИ один раз":result.status==="ai_unavailable"?"ИИ пока недоступен":result.status==="cancelled"?"Проверка остановлена":result.waiting_data?"Не хватает данных для анализа":"ИИ не подтвердил вход";
+      const invalidReply=/^(decision_|model_)/.test(result.ai_error_code||"");
+      const title=result.status==="loading"?(result.phase==="ai"?"ИИ анализирует рынок":result.phase==="quotes"?"Получаем текущие цены":"Загружаем данные всех пар"):result.status==="setup_required"?"Подключи ИИ один раз":result.status==="ai_unavailable"?(invalidReply?"Ответ ИИ не прошёл проверку":"ИИ пока недоступен"):result.status==="cancelled"?"Проверка остановлена":result.waiting_data?"Не хватает данных для анализа":"ИИ не подтвердил вход";
       host.append(node("h3","",title),node("p","",result.reason||"Ждём подтверждённые условия."));
+      if(result.status==="ai_unavailable"&&/^[a-z_]{3,48}$/.test(result.ai_error_code||""))host.append(node("p","quiet-text","Код проверки: "+result.ai_error_code));
       if(result.progress)host.append(node("p","",`Пары: ${result.progress.checked} / ${result.progress.total} с полными данными · история: ${result.progress.history_ready} · свежие котировки: ${result.progress.quoted}`));
       if(result.status==="loading"){const b=node("button","primary-small","Остановить проверку");b.id="cancel-scan";b.type="button";host.append(b);}
       if(result.ai){host.append(node("p","",`${result.ai.provider} · ${result.ai.model} · рассмотрено пар: ${result.ai.reviewed_pairs}`),node("p","","Риск/ограничение: "+result.ai.risk));}

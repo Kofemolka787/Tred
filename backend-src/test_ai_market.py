@@ -11,7 +11,7 @@ from ai_market import OpenAIAnalyzer, AIError, snapshot, validate
 from configure_ai import save
 from trading_core import Ledger, DomainError
 from test_market_analysis import fixture
-from test_support import FixtureAI
+from test_support import FixtureAI, wire_decision
 
 FEED = "11111111-1111-4111-8111-111111111111"
 
@@ -84,7 +84,10 @@ class AIMarketTests(unittest.TestCase):
             body = json.loads(request.data); seen.append(body)
             self.assertEqual(body['text']['format']['type'], 'json_schema'); self.assertFalse(body['store'])
             self.assertEqual(timeout, 35)
-            return io.BytesIO(json.dumps({'status': 'completed', 'output': [{'content': [{'type': 'output_text', 'text': json.dumps(decision)}]}]}).encode())
+            payload = json.loads(body['input'][1]['content'])
+            self.assertIn('Верни только один JSON-объект', body['input'][0]['content'])
+            self.assertEqual(body['text']['format']['schema']['properties']['evidence']['items']['required'], ['ref', 'explanation'])
+            return io.BytesIO(json.dumps({'status': 'completed', 'output': [{'content': [{'type': 'output_text', 'text': json.dumps(wire_decision(decision, payload))}]}]}).encode())
         save(self.tmp.name, 'fixture-key-only-for-contract-check', allowed_users=[101])
         analyzer = OpenAIAnalyzer(self.tmp.name, opener=opener)
         result = analyzer.review(value)
