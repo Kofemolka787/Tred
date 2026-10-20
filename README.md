@@ -1,8 +1,8 @@
 # TRED Mini App
 
-TRED v0.3.16 for @Tr1edBot_bot. Open https://kofemolka787.github.io/Tred/ from Telegram.
+TRED v0.3.17 for @Tr1edBot_bot. Open https://kofemolka787.github.io/Tred/ from Telegram.
 
-[Setup and update in Russian](backend-src/CONNECT-RU.md) · [Backend source](backend-src/) · [Download 0.3.16](https://kofemolka787.github.io/Tred/tred-backend-v0.3.16.zip)
+[Setup and update in Russian](backend-src/CONNECT-RU.md) · [Backend source](backend-src/) · [Download 0.3.17](https://kofemolka787.github.io/Tred/tred-backend-v0.3.17.zip)
 
 Read-only demo/real Pocket balances, Telegram-scoped connection discovery, and real OpenAI review of price structure/Smart Money evidence for 5/10/15-minute scenarios. Catalog and pair selection show all received instruments, including non-currency categories, without the former 24/100-row truncation. Only open instruments meeting payout/expiry filters are analyzed (prefer 92%, floor 85%).
 
@@ -10,7 +10,7 @@ The connector automatically requests quotes and history for matching catalog ins
 
 The real Responses API client sends only market evidence, closed OHLC samples and computed causal SMC/structure facts, with store:false and structured output validation. Every received eligible pair enters the review, with bounded batches and winner comparison for large catalogs. OpenAI chooses or declines an entry, within locally verified directions/entry conditions; timestamps and prices are checked again after the response. No forced signals, measured win probability or profitability claims. OTC patterns do not establish exchange order flow or actual liquidity. Longer expiry does not guarantee accuracy.
 
-SETUP-AI.cmd accepts the owner's API key locally with hidden input and stores it only in the private user directory, scoped to the existing paired Telegram owner. ChatGPT subscriptions do not cover API billing. No key appears in the browser, Telegram storage, archive or state API. Other users cannot spend that owner's key. Real provider errors are visible; analysis never silently falls back to a rule-only signal. Default model is gpt-5-mini and can be selected locally.
+SETUP-AI.cmd accepts the owner's API key locally with visible terminal input as requested by the owner and stores it only in the private user directory, scoped to the existing paired Telegram owner. ChatGPT subscriptions do not cover API billing. The key is visible in the local setup console while entered, and is absent from the Mini App, Telegram storage, archive and state API. Blank key input is re-prompted; HTTP401/403/404/429 setup errors are distinguished without echoing provider payloads. Other users cannot spend that owner's key. Real provider errors are visible; analysis never silently falls back to a rule-only signal. Default model is gpt-5-mini and can be selected locally.
 
 After independently entering a trade, the same signed user can follow received quotes from another device and report win/loss/draw after expiry. The app shows entry window, chosen duration, estimated close time and AI explanation. Manual outcomes stay separate from broker balances/statistics. Existing balance delivery and cross-device cabinet were owner-confirmed; the new native scanner and actual owner OpenAI calls still require installation and validation.
 

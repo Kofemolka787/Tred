@@ -1,6 +1,5 @@
-"""Local-only hidden API-key input. Never part of the Mini App API."""
+"""Local-only visible API-key input, requested by the owner. Never a web API."""
 import argparse
-import getpass
 import json
 import os
 from pathlib import Path
@@ -13,8 +12,10 @@ from urllib.request import Request, urlopen
 
 
 def verify_key(key, model):
-    if not isinstance(key, str) or not 20 <= len(key) <= 2048 or any(ord(c) < 33 for c in key) or not re.fullmatch(r"[A-Za-z0-9._:-]{1,80}", model):
-        raise ValueError("Проверь формат ключа и название модели.")
+    if not isinstance(key, str) or not 20 <= len(key) <= 2048 or any(ord(c) < 33 for c in key):
+        raise ValueError("Проверь API-ключ: нужна полная строка без пробелов.")
+    if not isinstance(model, str) or not re.fullmatch(r"[A-Za-z0-9._:-]{1,80}", model):
+        raise ValueError("Проверь название модели. Для стандартного варианта достаточно Enter.")
     try:
         request = Request("https://api.openai.com/v1/models/" + model, headers={"Authorization": "Bearer " + key})
         with urlopen(request, timeout=20) as response:
@@ -22,9 +23,38 @@ def verify_key(key, model):
         if not isinstance(result, dict) or not result.get("id"):
             raise ValueError("Модель не подтвердила доступ.")
     except HTTPError as error:
-        raise ValueError("OpenAI не подтвердил ключ или доступ к модели. Проверь API-аккаунт и название модели.") from None
+        messages = {
+            401: "OpenAI отклонил API-ключ (HTTP 401). Проверь полный ключ OpenAI и не был ли он отозван.",
+            403: "OpenAI запретил доступ (HTTP 403). Проверь ограничения API-аккаунта и разрешения ключа.",
+            404: "OpenAI не нашёл выбранную модель или не дал к ней доступ (HTTP 404). Проверь ID модели и доступ в API-аккаунте.",
+            429: "OpenAI ограничил запросы или исчерпана квота (HTTP 429). Проверь API-баланс и лимиты.",
+        }
+        raise ValueError(messages.get(error.code, f"Проверка OpenAI завершилась ошибкой HTTP {error.code}. Повтори позже.")) from None
     except (URLError, OSError):
         raise ValueError("Нет соединения с OpenAI. Проверь интернет и повтори настройку.") from None
+
+
+def read_key():
+    while True:
+        key = input("OpenAI API key (видимый ввод): ").strip()
+        if not key:
+            print("Ключ не введён. Вставь его в эту строку и только затем нажми Enter.")
+        elif not 20 <= len(key) <= 2048 or any(ord(c) < 33 for c in key):
+            print("Нужна полная строка API-ключа без пробелов. Повтори ввод.")
+        else:
+            print(f"Введено символов ключа: {len(key)}.")
+            return key
+
+
+def read_model():
+    while True:
+        model = input("Модель [gpt-5-mini] — просто Enter для стандартной: ").strip() or "gpt-5-mini"
+        if model.startswith(("sk-", "lr_")):
+            print("Это строка модели, ключ здесь не нужен. Просто нажми Enter для gpt-5-mini.")
+        elif not re.fullmatch(r"[A-Za-z0-9._:-]{1,80}", model):
+            print("Нужно название модели, например gpt-5-mini. Повтори ввод или нажми Enter.")
+        else:
+            return model
 
 
 def save(directory, key, model="gpt-5-mini", *, allowed_users):
@@ -52,9 +82,10 @@ def main():
     parser.add_argument("--data-dir", type=Path, default=default)
     args = parser.parse_args()
     print("TRED: локальная настройка OpenAI. API оплачивается отдельно от ChatGPT.")
-    print("Введи API-ключ здесь. Символы не отображаются; в чат его отправлять не нужно.")
-    key = getpass.getpass("OpenAI API key: ").strip()
-    model = input("Модель [gpt-5-mini]: ").strip() or "gpt-5-mini"
+    print("Символы ключа будут ВИДНЫ при вводе. Вставь ключ в строку ниже.")
+    print("Не отправляй скриншот со строкой ключа в чат.")
+    key = read_key()
+    model = read_model()
     database = args.data_dir / "ledger.sqlite3"
     if not database.is_file():
         raise ValueError("Сначала запусти TRED и свяжи свой кабинет с расширением.")
