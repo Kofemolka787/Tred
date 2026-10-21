@@ -12,7 +12,7 @@ FILES=("backend.py","telegram_auth.py","trading_core.py","market_analysis.py","m
        "tunnel_check.py","test_tunnel_check.py","test_free_start.py","check_connector_worker.js","check_connector_http.py","check_pairing_ui.py","check_connector_popup.py","check_data_client.js","check_terminal_ui.py","check_device_sync.py")
 CONNECTOR=("market-scan.js","scan-worker.js","manifest.json","observer.js","balance-read.js","relay.js","worker.js","time-check.js","account-check.js","popup.html","popup.css","popup.js")
 WEB=("index.html","styles.css","app.js","signals.js","data-client.js","app-config.json")
-VERSION="0.4.0"
+VERSION="0.4.1"
 
 
 def windows_batch(data):

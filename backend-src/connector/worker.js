@@ -1,6 +1,6 @@
 "use strict";
 importScripts("time-check.js","account-check.js","scan-worker.js");
-const WORKER_VERSION="0.4.0";
+const WORKER_VERSION="0.4.1";
 const endpoint=value=>{
   const u=new URL(value);
   if(u.protocol!=="https:"||!/^[a-z0-9-]+\.trycloudflare\.com$/.test(u.hostname)||u.port||u.username||u.password||u.search||u.hash||u.pathname!=="/")throw new Error("Укажи HTTPS-адрес своего TRED-туннеля.");
@@ -135,7 +135,7 @@ async function flush(){
       }catch(error){
         if(epoch!==generation)return;
         backlogDelay=1000;
-        lastError=error.status===400&&error.message==="Пакет содержит неподдерживаемые поля."?"Сервер не поддерживает данные модуля. Обнови весь пакет TRED 0.4.0 и перезапусти сервер.":error.message.slice(0,200);
+        lastError=error.status===400&&error.message==="Пакет содержит неподдерживаемые поля."?"Сервер не поддерживает данные модуля. Обнови весь пакет TRED 0.4.1 и перезапусти сервер.":error.message.slice(0,200);
         if(kind==="account"&&(!error.status||error.status===429||error.status>=500))for(const event of accepted)retryAccounts.set(TredAccount.key(event),accountSources.get(TredAccount.key(event)));
         if(kind!=="account"&&(!error.status||error.status===429||error.status>=500)){
           // Keep the original source event, including its clock tag and time.
@@ -298,7 +298,7 @@ async function attachOpenTerminals(){
   try{
     const tabs=await chrome.tabs.query({url:["https://pocketoption.com/*","https://*.pocketoption.com/*"]});
     for(const tab of tabs){
-      if(!Number.isInteger(tab.id)||!/^https:\/\/([a-z0-9-]+\.)*pocketoption\.com\/(?:[a-z]{2}\/)?cabinet\//i.test(tab.url||""))continue;
+      if(!Number.isInteger(tab.id)||!/^https:\/\/([a-z0-9-]+\.)*pocketoption\.com\/(?:[a-z]{2}\/)?cabinet(?:\/|[?#]|$)/i.test(tab.url||""))continue;
       await chrome.scripting.executeScript({target:{tabId:tab.id},world:"MAIN",files:["market-scan.js","observer.js"]});
       await chrome.scripting.executeScript({target:{tabId:tab.id},world:"ISOLATED",files:["balance-read.js","relay.js"]});
     }

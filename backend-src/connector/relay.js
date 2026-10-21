@@ -2,7 +2,7 @@
 // Only this isolated context can reach the worker. Reinstallation replaces a
 // disposed relay in an already-open tab, without navigating the trading page.
 (()=>{
-  const VERSION="0.4.0",old=globalThis.__tredRelay;
+  const VERSION="0.4.1",old=globalThis.__tredRelay;
   if(old?.version===VERSION&&old.active){old.scan();return;}
   old?.dispose();
   let stopped=false,interval,settleTimer,pendingKey="",lastKey="",checking=false;

@@ -32,7 +32,7 @@ with tempfile.TemporaryDirectory(prefix="tred-terminal-ui-") as temporary:
     base_handler=handler(ledger,public_key=public)
     class FixtureHandler(base_handler):
         def do_GET(self):
-            if self.path.startswith("/ru/cabinet/"):
+            if self.path=="/ru/cabinet" or self.path.startswith("/ru/cabinet/"):
                 return self.reply(200,HTML,"text/html; charset=utf-8")
             if self.path=="/app-config.json":
                 return self.reply(200,{"mode":"api","version":3})
@@ -61,7 +61,7 @@ with tempfile.TemporaryDirectory(prefix="tred-terminal-ui-") as temporary:
                 context.on("page",lambda page:page.on("pageerror",lambda error:errors.append(str(error))))
                 terminal=context.new_page();terminal.expose_function("forwardToWorker",forward)
                 terminal.add_init_script("window.chrome={runtime:{id:'fixture',sendMessage:message=>{if(window.invalidateRelay)throw Error('Extension context invalidated.');return window.forwardToWorker(message);}}};")
-                terminal.goto(base+"/ru/cabinet/demo-quick-high-low/")
+                terminal.goto(base+"/ru/cabinet")
                 terminal.evaluate((ROOT/"connector/balance-read.js").read_text())
                 assert terminal.evaluate("TredTerminalBalance.read().snapshot.balance")=="105.20"
                 terminal.evaluate((ROOT/"connector/relay.js").read_text())
@@ -84,7 +84,7 @@ with tempfile.TemporaryDirectory(prefix="tred-terminal-ui-") as temporary:
                 status=forward({"action":"status"})
                 assert status["lastBalance"]["origin"]=="terminal-dom"
 
-                terminal.evaluate("window.invalidateRelay=true;window.postMessage({source:'tred-observer-v1',observer_version:'0.4.0',events:[{type:'quote'}]},location.origin)")
+                terminal.evaluate("window.invalidateRelay=true;window.postMessage({source:'tred-observer-v1',observer_version:'0.4.1',events:[{type:'quote'}]},location.origin)")
                 terminal.wait_for_function("!__tredRelay.active")
                 terminal.evaluate("window.invalidateRelay=false")
                 terminal.evaluate((ROOT/"connector/relay.js").read_text())
@@ -101,7 +101,7 @@ with tempfile.TemporaryDirectory(prefix="tred-terminal-ui-") as temporary:
                 terminal.evaluate("document.querySelector('#label').textContent='QT Demo USD';document.body.insertAdjacentHTML('beforeend','<div><span>QT Real USD</span><div>500.00</div></div>')")
                 assert terminal.evaluate("TredTerminalBalance.read().code")=="ambiguous_header"
                 assert not errors,errors
-                result={"actual_dom_mutation_to_worker_to_backend_to_signed_miniapp":True,"no_websocket_balance_events_provided":True,"balances":["105.20",*amounts,"201.05"],"no_id_confirmation_or_page_reload":True,"synchronous_context_invalidation_recovered":True,"hidden_real_account_ignored":True,"ambiguous_header_and_non_usd_rejected":True,"second_user_empty":True,"page_errors":len(errors),"native_extension_or_owner_device_verified":False}
+                result={"actual_dom_mutation_to_worker_to_backend_to_signed_miniapp":True,"terminal_path":"/ru/cabinet","no_websocket_balance_events_provided":True,"balances":["105.20",*amounts,"201.05"],"no_id_confirmation_or_page_reload":True,"synchronous_context_invalidation_recovered":True,"hidden_real_account_ignored":True,"ambiguous_header_and_non_usd_rejected":True,"second_user_empty":True,"page_errors":len(errors),"native_extension_or_owner_device_verified":False}
                 (ROOT/"artifacts").mkdir(exist_ok=True)
                 (ROOT/"artifacts/terminal-balance-check.json").write_text(json.dumps(result,indent=2)+"\n")
                 print(json.dumps(result))

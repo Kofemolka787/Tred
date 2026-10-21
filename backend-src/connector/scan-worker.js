@@ -4,19 +4,31 @@
 globalThis.TredScan=(()=>{
   const feeds=new Map();let running=false,lastPoll=0,code="no_socket";
   const validFeed=v=>typeof v==="string"&&/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(v);
-  const terminal=t=>Number.isInteger(t?.id)&&/^https:\/\/([a-z0-9-]+\.)*pocketoption\.com\/(?:[a-z]{2}\/)?cabinet\//i.test(t.url||t.pendingUrl||"");
+  const terminal=t=>Number.isInteger(t?.id)&&/^https:\/\/([a-z0-9-]+\.)*pocketoption\.com\/(?:[a-z]{2}\/)?cabinet(?:\/|[?#]|$)/i.test(t.url||t.pendingUrl||"");
+  const collector=t=>terminal(t)&&new URL(t.url||t.pendingUrl).searchParams.get("tred_scanner")==="1";
+  let ownedTabId=null;
+  async function isCollector(tab){
+    if(!terminal(tab))return false;
+    if(collector(tab)||ownedTabId===tab.id)return true;
+    // Browser-session storage survives worker suspension, but not a browser
+    // restart where a saved numeric tab ID may now belong to the user's tab.
+    const proof=await chrome.storage.session?.get(["tredCollectorTabId"]);
+    if(proof?.tredCollectorTabId===tab.id){ownedTabId=tab.id;return true;}
+    return false;
+  }
   async function tag(events,sender){
     const {scannerTabId,scannerFeeds=[]}=await chrome.storage.local.get(["scannerTabId","scannerFeeds"]);
-    if(sender.tab.id===scannerTabId){
+    const dedicated=sender.tab.id===scannerTabId&&await isCollector({id:sender.tab.id,url:sender.url});
+    if(dedicated){
       const ids=new Set(scannerFeeds.filter(validFeed));
       for(const e of events)if(validFeed(e?.feed_id)){if(e.type==="feed"&&e.connected===false)ids.delete(e.feed_id);else if(e.type==="asset")ids.add(e.feed_id);}
       await chrome.storage.local.set({scannerFeeds:[...ids].slice(-128)});
     }
-    return events.map(event=>event?.type==="asset"?{...event,source_role:sender.tab.id===scannerTabId?"scanner":"terminal"}:event);
+    return events.map(event=>event?.type==="asset"?{...event,source_role:dedicated?"scanner":"terminal"}:event);
   }
   async function ensureScanner(tabs,plan,stored){
     const id=stored.scannerTabId;
-    if(Number.isInteger(id)&&tabs.some(t=>t.id===id&&terminal(t))){
+    if(Number.isInteger(id)&&await isCollector(tabs.find(t=>t.id===id))){
       if(Number.isInteger(plan.scan_id)&&stored.scannerJobId!==plan.scan_id&&chrome.tabs.reload){
         await chrome.storage.local.set({scannerJobId:plan.scan_id});
         await chrome.tabs.reload(id);
@@ -24,16 +36,24 @@ globalThis.TredScan=(()=>{
       return id;
     }
     if(Number.isInteger(id)&&chrome.tabs.get){
-      try{await chrome.tabs.get(id);return id;}catch(_){/* It was closed while this worker was asleep. */}
+      try{
+        const existing=await chrome.tabs.get(id);
+        if(await isCollector(existing))return id;
+        // A live collector may still be at about:blank or the login page.
+        // A normal terminal with a reused browser tab ID is not our collector.
+        if(!terminal(existing))return null;
+      }catch(_){/* It was closed while this worker was asleep. */}
     }
     // A user's explicit close pauses this job. A new request can open a new
     // collector, but an old poll cannot keep recreating a closed tab.
     if(!plan.scanner_active||!chrome.tabs.create||!chrome.tabs.update||stored.scannerPaused&&(plan.scan_id==null||stored.scannerPausedJob===plan.scan_id))return null;
-    const source=tabs.find(t=>terminal(t)&&t.id!==id);
+    const source=tabs.find(t=>terminal(t)&&!collector(t));
     if(!source)return null;
     const url=new URL(source.url||source.pendingUrl);url.search="?tred_scanner=1";url.hash="";
     const tab=await chrome.tabs.create({url:"about:blank",active:false});
     if(!Number.isInteger(tab?.id))throw Error("scanner tab");
+    ownedTabId=tab.id;
+    await chrome.storage.session?.set({tredCollectorTabId:tab.id});
     await chrome.storage.local.set({scannerTabId:tab.id,scannerJobId:plan.scan_id,scannerPausedJob:null,scannerPaused:false,scannerFeeds:[]});
     await chrome.tabs.update(tab.id,{url:url.href});
     return tab.id;
@@ -103,7 +123,10 @@ globalThis.TredScan=(()=>{
     const stored=await chrome.storage.local.get(["scannerTabId","scannerJobId","scannerFeeds","base","token","needsPairing"]);
     const lost=[...new Set([...feeds].filter(([,id])=>id===tabId).map(([id])=>id).concat(stored.scannerTabId===tabId?(stored.scannerFeeds||[]).filter(validFeed):[]))];
     for(const id of lost)feeds.delete(id);
-    if(stored.scannerTabId===tabId)await chrome.storage.local.set({scannerTabId:null,scannerFeeds:[],scannerPausedJob:stored.scannerJobId,scannerPaused:true});
+    if(stored.scannerTabId===tabId){
+      ownedTabId=null;await chrome.storage.session?.set({tredCollectorTabId:null});
+      await chrome.storage.local.set({scannerTabId:null,scannerFeeds:[],scannerPausedJob:stored.scannerJobId,scannerPaused:true});
+    }
     if(lost.length&&stored.base&&stored.token&&!stored.needsPairing){
       const events=lost.map(feed_id=>({type:"feed",feed_id,connected:false,time:Date.now()/1000}));
       if(enqueue)enqueue(events);

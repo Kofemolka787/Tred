@@ -3,7 +3,7 @@
 // The foreground terminal keeps the passive/advanced-history path. No orders,
 // login frames, account changes or credential APIs are available here.
 (()=>{
-  const VERSION="0.4.0";
+  const VERSION="0.4.1";
   if(window.__tredMarketScanner?.version===VERSION)return;
   window.__tredMarketScanner?.stop();
   const sockets=new Map(),attempts=new Map(),pending=new Map();

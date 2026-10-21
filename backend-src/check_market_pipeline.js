@@ -11,7 +11,7 @@ const probesOnly=process.argv.includes("--quote-probe-fixture");
 const unindexed=process.argv.includes("--unindexed-fast-fixture");
 const shortPages=process.argv.includes("--short-page-fixture");
 const nativeChart=process.argv.includes("--native-chart-fixture");
-const pageSender=nativeChart?{...sender,url:sender.url+'?tred_scanner=1'}:sender;
+const pageSender=nativeChart?{...sender,url:'https://pocketoption.com/ru/cabinet?tred_scanner=1'}:sender;
 if(nativeChart)h.storage.scannerTabId=1;
 class Socket {
  constructor(){this.handlers={};this.readyState=1;this.subscribed=new Set();}

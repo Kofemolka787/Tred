@@ -13,7 +13,7 @@ globalThis.TredTerminalBalance=(()=>{
   }
   const visible=node=>node?.isConnected&&node.getClientRects().length>0&&getComputedStyle(node).visibility!=="hidden";
   function read(){
-    if(!/\/(?:[a-z]{2}\/)?cabinet\//i.test(location.pathname))return {code:"not_terminal"};
+    if(!/^\/(?:[a-z]{2}\/)?cabinet(?:\/|$)/i.test(location.pathname))return {code:"not_terminal"};
     const found=new Map();
     for(const node of Array.from(document.querySelectorAll("span,div,button,a,strong")).slice(0,10000)){
       const text=clean(node.textContent);
