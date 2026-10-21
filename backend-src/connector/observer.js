@@ -2,14 +2,14 @@
 // Observes data and connects the bounded read-only market scanner to the
 // existing socket. Login, cookies and outgoing auth frames are never copied.
 (() => {
-  if(window.__tredObserverVersion==="0.4.2")return;
-  window.__tredObserverVersion="0.4.2";
+  if(window.__tredObserverVersion==="0.4.3")return;
+  window.__tredObserverVersion="0.4.3";
   const Native = window.WebSocket;
   const contexts=new WeakMap();
   const number = v => typeof v === "number" && Number.isFinite(v);
   const safeSymbol = v => typeof v === "string" && /^[A-Za-z0-9][A-Za-z0-9_./ #-]{1,31}$/.test(v);
   const ts = v => number(v) ? (v > 1e11 ? v / 1000 : v) : null;
-  const emit = events => { for(let i=0;i<events.length;i+=250) window.postMessage({source:"tred-observer-v1",observer_version:"0.4.2",events:events.slice(i,i+250)},location.origin); };
+  const emit = events => { for(let i=0;i<events.length;i+=250) window.postMessage({source:"tred-observer-v1",observer_version:"0.4.3",events:events.slice(i,i+250)},location.origin); };
   const accountId = value => (typeof value === "string" || typeof value === "number" && Number.isSafeInteger(value)) && /^\d{1,20}$/.test(String(value)) && !/^0+$/.test(String(value)) ? String(value) : null;
   const idType = value => value===undefined?"none":value===null||value===""?"empty":value===0||typeof value==="string"&&/^0+$/.test(value)?"zero":accountId(value)?typeof value==="number"?"integer":"digits":Array.isArray(value)?"array":["number","string","boolean","object"].includes(typeof value)?typeof value==="string"?"text":typeof value:"other";
   const identity = async (name,data) => {

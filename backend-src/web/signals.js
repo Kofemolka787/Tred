@@ -45,6 +45,7 @@ window.TredSignals=(()=>{
     if(setup.signal_mode==="active")detail.append(node("p","notice","Режим «Чаще»: ранние входы с повышенным риском. Частота не означает более высокую проходимость."));
     if(setup.strategy_name)detail.append(node("p","",`Стратегия: ${setup.strategy_name}. Таймфреймы: ${(setup.timeframes||[]).map(p=>"M"+p/60).join(" + ")}.`));
     if(setup.strategy_risk)detail.append(node("p","","Слабость стратегии: "+setup.strategy_risk));
+    if(setup.revalidated_at)detail.append(node("p","","После ответа ИИ исходный сценарий повторно проверен в "+clock(setup.revalidated_at)+". Новая свеча сама по себе его не отменяет; зона и условие отмены должны сохраняться."));
     if(setup.ai)detail.append(node("p","",`${setup.ai.provider} · ${setup.ai.model}: ${setup.ai.summary}`),node("p","","Что учитывать: "+setup.ai.risk));
     const list=node("ol");for(const line of setup.evidence||[])list.append(node("li","",line));detail.append(list);
     detail.append(node("p","","BOS — закрытие за подтверждённым экстремумом. FVG — разрыв между первой и третьей свечой импульса. ATR — средний истинный диапазон свечей. Sweep — вынос экстремума с возвратом."));
@@ -124,7 +125,7 @@ window.TredSignals=(()=>{
       strategyHelp.hidden=!feed?.strategy_catalog?.length;strategies.replaceChildren();
       for(const s of feed?.strategy_catalog||[]){const row=node("p");row.append(node("strong","",s.name),node("span",""," — "+s.rule),node("small","","Слабость: "+s.weakness));strategies.append(row);}
     }
-    $("#signals-upgrade").hidden=state.mode!=="api"||state.market_data_version===7&&!!feed?.strategy_catalog?.length;
+    $("#signals-upgrade").hidden=state.mode!=="api"||state.market_data_version===8&&!!feed?.strategy_catalog?.length;
     $("#ai-status").textContent=state.mode!=="api"?"ИИ подключается к твоему серверу TRED.":state.ai?.configured?`ИИ: ${state.ai.provider} · ${state.ai.model}. Ключ настроен; решение проверяется по свежим данным.`:"ИИ ещё не настроен. Запусти SETUP-LUNAROUTE.cmd на компьютере и введи ключ LunaRoute локально.";
     const help=$("#feed-help");
     if(feed?.blocked){

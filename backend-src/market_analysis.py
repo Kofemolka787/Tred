@@ -29,6 +29,8 @@ def setup_id(candidate):
 def same_setup(current, previous):
     if (current['symbol'],current['direction'],current.get('strategy'),current['timeframes'])!=(previous['symbol'],previous['direction'],previous.get('strategy'),previous['timeframes']):
         return False
+    if previous.get('source_feed') is not None and current.get('source_feed')!=previous['source_feed']:
+        return False
     if previous.get('setup_id'):
         return current.get('setup_id')==previous['setup_id']
     return current['bar_time']==previous['bar_time'] and current['context_bar_time']==previous['context_bar_time']
@@ -223,6 +225,9 @@ def rank(assets, histories, *, expiry, market, symbol, allow_otc, now, min_payou
                             "entry_ready":entry_ready,"reference_price":first['close'],"reference_source":"closed_bar",
                             "strategy": first["strategy"], "strategy_name": first["strategy_name"], "strategy_risk": first["strategy_risk"],
                             "signal_mode":signal_mode,"risk_level":"elevated" if signal_mode=="active" else "standard",
+                            "source_feed":asset.get('catalog_feed'),
+                            "setup_valid_until":first['bar_time']+periods[0]+min(180,2*periods[0]) if signal_mode=='active' and first['strategy'] in ('ema_pullback','trend_continuation','momentum_breakout','level_engulfing') else first['bar_time']+2*periods[0],
+                            "anchor_bars":frames[0]['rows'][-12:],
                             "score": first["score"], "evidence": [*first["evidence"], *([f"Старший M{periods[1]//60} подтверждает направление структуры."] if first["strategy"] == "smart_money" else [])],
                             "timeframes": list(periods), "payout": asset["payout"], "price": price,
                             "quote_time": asset["quote_time"], "zones": first["zones"], "events": first["events"],

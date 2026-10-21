@@ -20,6 +20,8 @@ def migrate(db):
         db.execute("ALTER TABLE scan_jobs ADD COLUMN watch_symbols TEXT NOT NULL DEFAULT '[]'")
     if 'quote_until' not in columns:
         db.execute('ALTER TABLE scan_jobs ADD COLUMN quote_until REAL')
+    if 'entry_contracts' not in columns:
+        db.execute("ALTER TABLE scan_jobs ADD COLUMN entry_contracts TEXT NOT NULL DEFAULT '[]'")
 
 
 def selection(asset, prefs):
@@ -49,6 +51,10 @@ class MarketScanner:
             db.execute("INSERT INTO scan_bridge VALUES (?,?,?) ON CONFLICT(user_id) DO UPDATE SET seen_at=excluded.seen_at,code=excluded.code", (uid, now, value["code"]))
             prefs, assets, histories = self._market(db, uid)
             candidates = pool(assets, prefs)
+            # Keep the market warm independently of a paid analysis. Manual
+            # selection gets priority without throwing other charts away.
+            warming = pool(assets, {**prefs,"symbol":None})
+            selected = {a['symbol'] for a in candidates} if prefs.get('selection')=='manual' else set()
             # Active observations remain streamed when the selected market changes.
             watched = {r[0] for r in db.execute("SELECT symbol FROM signal_sessions WHERE user_id=? AND result IS NULL AND expires_at>?", (uid, now))}
             for row in db.execute("SELECT watch_symbols FROM scan_jobs WHERE user_id=? AND status='ai' AND started_at>?",(uid,now-240)):
@@ -59,7 +65,8 @@ class MarketScanner:
                     watched.add(result["symbol"])
             by_symbol = {a["symbol"]: a for a in assets}
             prioritized = [by_symbol[s] for s in sorted(watched) if s in by_symbol]
-            prioritized.extend(a for a in candidates if a["symbol"] not in watched)
+            prioritized.extend(a for a in candidates if a['symbol'] in selected and a['symbol'] not in watched)
+            prioritized.extend(a for a in warming if a["symbol"] not in watched|selected)
             rows = []
             for a in prioritized:
                 if not a.get("catalog_feed") or not a.get("feed_connected"):
@@ -67,8 +74,8 @@ class MarketScanner:
                 frames, bars, checks = frame_data(histories, a["symbol"], prefs["expiry"], now)
                 usable = all(c.get("history_ready") for c in checks)
                 effective = dict(zip(frames, bars)) if usable else {}
-                needed = []
-                for period in frames:
+                needed, background = [], []
+                for period in dict.fromkeys((*frames,60,300,900)):
                     # frame_data can already supply complete M2/M10 etc. from
                     # contiguous lower-period bars. Reuse that verified history
                     # instead of repeatedly fetching a new 160-bar native copy.
@@ -83,15 +90,15 @@ class MarketScanner:
                         # bars. Stale data is refreshed at the current time first.
                         if not complete and tail and now-(tail[-1]['time']+period)<=period+10:
                             task['before']=math.floor(tail[0]['time']/period)*period
-                        needed.append(task)
+                        (needed if period in frames else background).append(task)
                 quoted = a.get("quote_time") is not None and now-a["quote_time"] <= 8 and a.get("quote_feed") == a["catalog_feed"]
-                priority=a['symbol'] in watched
+                priority=a['symbol'] in watched|selected
                 # Focused instruments keep a task present even between polls;
                 # MAIN skips it while its own genuine tick is <=5 seconds old.
-                rows.append({"symbol": a["symbol"], "feed_id": a["catalog_feed"], "history": needed, "quote": priority or not quoted,"priority":priority,"chart_period":frames[0]})
+                rows.append({"symbol": a["symbol"], "feed_id": a["catalog_feed"], "history": needed,"warm_history":background, "quote": priority or not quoted,"priority":priority,"chart_period":frames[0]})
             active=db.execute("SELECT id FROM scan_jobs WHERE user_id=? AND status IN ('loading','ai') AND started_at>? ORDER BY id DESC LIMIT 1",(uid,now-240)).fetchone()
             return {"ok": True, "plan": {"version": 1, "until": now + 15, "pairs": rows, "total": len(candidates),
-                                        "scan_id":active[0] if active else None,"scanner_active":bool(active or watched)}}
+                                        "scan_id":active[0] if active else None,"warm_total":len(warming),"scanner_active":bool(warming or watched)}}
 
     def _scan_progress(self, db, uid, prefs, assets, histories, now):
         eligible = pool(assets, prefs)
@@ -148,12 +155,12 @@ class MarketScanner:
             # An actual setup can start partial review after 12s. Merely having
             # one closed graph must not spend a model call on an empty shortlist
             # and freeze a rejection while the other charts are still arriving.
-            preview=None
+            preview=None;contracts=json.loads(job['entry_contracts'])
             complete=bool(progress['total'] and progress['analysis_ready']>=progress['total'])
             future=self.ai.get(job['id'])
             if not risk['locked'] and future is None and progress['analysis_ready'] and (complete or now-job['started_at']>=12 or now>=job['deadline']):
                 from ai_market import snapshot
-                preview,_=snapshot(assets,histories,prefs,now)
+                preview,contracts=snapshot(assets,histories,prefs,now)
                 progress['qualified_setups']=len(preview['qualified'])
             partial_ready=bool(preview and preview['qualified'] and now-job['started_at']>=12)
             if not risk["locked"] and not self.ai.get(job["id"]) and now < job["deadline"] and not partial_ready and (not progress["total"] or progress["analysis_ready"] < progress["total"]):
@@ -172,12 +179,14 @@ class MarketScanner:
                             raise AIError("Сервер перезапущен во время ответа ИИ. Запроси новый анализ.")
                         if not self.ai.status(uid)["configured"]:
                             raise AIError("API-доступ изменился. Проверь SETUP-AI.cmd на компьютере.")
-                        value = preview if preview is not None else snapshot(assets, histories, prefs, now)[0]
+                        if preview is None:
+                            value,contracts=snapshot(assets,histories,prefs,now)
+                        else:value=preview
                         future = self.ai.submit(job["id"], value)
                         # Closed-graph research does not need fresh ticks for
                         # every candidate simultaneously. Reserve focused tick
                         # recovery for the actual choice, keeping history moving.
-                        db.execute("UPDATE scan_jobs SET status='ai',watch_symbols='[]' WHERE id=?", (job["id"],))
+                        db.execute("UPDATE scan_jobs SET status='ai',watch_symbols='[]',entry_contracts=? WHERE id=?", (json.dumps([{**c,'candles':[]} for c in contracts]),job["id"]))
                     if not future.done():
                         return {"status": "loading", "phase": "ai", "scan_id": job["id"], "deadline": job["deadline"], "progress": progress,
                                 "reason": f"{self.ai.status(uid)['provider']} сравнивает сценарии выбранного режима по полученным графикам. Решение появится здесь автоматически; повторно нажимать кнопку не нужно."}
@@ -193,8 +202,17 @@ class MarketScanner:
                     if decision["action"] == "enter":
                         _, fresh = snapshot(assets, histories, prefs, now)
                         selected = next((c for c in fresh if c['entry_ready'] and (c["symbol"], c["direction"], c["strategy"]) == (decision["symbol"], decision["direction"], decision["strategy"])), None)
-                        prior = next((q for q in original["qualified"] if (q["symbol"], q["direction"], q["strategy"]) == (decision["symbol"], decision["direction"], decision["strategy"])), None)
-                        live_window=selected and (selected['strategy']=='smart_money' and selected['zones'] or now<selected['bar_time']+2*selected['timeframes'][0])
+                        identity=(decision['symbol'],decision['direction'],decision['strategy'])
+                        prior = next((q for q in contracts if (q['symbol'],q['direction'],q['strategy'])==identity),None)
+                        if prior is None:prior=next((q for q in original['qualified'] if (q['symbol'],q['direction'],q['strategy'])==identity),None)
+                        asset=next((a for a in assets if a['symbol']==decision['symbol']),None)
+                        failure='setup_changed'
+                        if prior and now>=prior.get('setup_valid_until',float('inf')):failure='setup_expired'
+                        if prior and now-original['as_of']<=180 and (not selected or not same_setup(selected,prior)):
+                            from entry_validation import revalidate_early
+                            checked,failure=revalidate_early(prior,asset,histories,prefs,now)
+                            if checked:selected=checked
+                        live_window=selected and (selected['strategy']=='smart_money' and selected['zones'] or now<selected.get('setup_valid_until',selected['bar_time']+2*selected['timeframes'][0]))
                         if selected and prior and live_window and same_setup(selected,prior) and prior["entry_low"] <= selected["price"] <= prior["entry_high"] and now - original["as_of"] <= 180:
                             result = {"status": "candidate", **selected, "expiry": prefs["expiry"], "entry_at": now, "valid_until": now + 30, "expires_at": now + prefs["expiry"] * 60,
                                       "validated": False, "min_payout": prefs["min_payout"] / 100, "probability": None, "ai": info,
@@ -202,10 +220,9 @@ class MarketScanner:
                             result['entry_low']=max(selected['entry_low'],prior['entry_low'])
                             result['entry_high']=min(selected['entry_high'],prior['entry_high'])
                             if selected['strategy']!='smart_money' or not selected['zones']:
-                                result['valid_until']=min(result['valid_until'],selected['bar_time']+2*selected['timeframes'][0])
+                                result['valid_until']=min(result['valid_until'],selected.get('setup_valid_until',selected['bar_time']+2*selected['timeframes'][0]))
                         else:
-                            asset=next((a for a in assets if a['symbol']==decision['symbol']),None)
-                            needs_quote=prior and asset and selection(asset,prefs) and catalog_observed(asset,now) and not catalog_current(asset,now) and now-original['as_of']<=180
+                            needs_quote=failure!='setup_expired' and prior and asset and selection(asset,prefs) and catalog_observed(asset,now) and not catalog_current(asset,now) and now-original['as_of']<=180
                             if needs_quote:
                                 until=job['quote_until'] if job['quote_until'] is not None else now+12
                                 db.execute("UPDATE scan_jobs SET quote_until=?,watch_symbols=? WHERE id=?",(until,json.dumps([decision['symbol']]),job['id']))
@@ -214,7 +231,15 @@ class MarketScanner:
                                             'reason':f"ИИ выбрал сценарий {decision['symbol']}. Запрашиваем текущую цену этой пары и проверяем зону. Направление входа появится только после проверки; повторный запрос ИИ не отправляется."}
                                 result.update(waiting_data=True,reason='Не получена свежая цена выбранной пары. Вход не показан; история свечей не используется вместо живой котировки.')
                             else:
-                                result["reason"] = "Пока ИИ анализировал данные, цена или условия сценария изменились. Старый вход пропущен; запроси новый анализ."
+                                reasons={'setup_expired':'Время исходного сценария истекло до ответа ИИ. Запроси новый анализ.',
+                                         'source_changed':'Во время анализа сменился рыночный канал. Ждём свежую историю этого соединения.',
+                                         'price_left_zone':'Пока ИИ отвечал, цена вышла из исходной зоны входа.',
+                                         'setup_invalidated':'После анализа новая закрытая свеча нарушила исходное условие сценария.',
+                                         'context_changed':'Новые закрытые свечи больше не подтверждают исходное направление.',
+                                         'anchor_changed':'История сигнальных свечей изменилась; требуется новый анализ.',
+                                         'history_missing':'Не получена полная свежая история для проверки исходного сценария.'}
+                                result['reason_code']=failure or 'setup_changed'
+                                result["reason"] = reasons.get(failure,"Пока ИИ анализировал данные, цена или условия сценария изменились. Старый вход пропущен; запроси новый анализ.")
                 except AIError as error:
                     result = {"status": "ai_unavailable", "reason": str(error), 'ai_error_code':error.code}
                 except Exception:

@@ -68,13 +68,25 @@ def check_local(port):
         return False
 
 
-def main():
+def main(*,status=None,stop=None):
     parser=argparse.ArgumentParser()
     parser.add_argument("--port",type=int,default=8790)
     parser.add_argument("--local-only",action="store_true")
     parser.add_argument("--check",action="store_true",help="Start, verify health/private API, then stop own process")
     parser.add_argument("--data-dir",type=Path,default=ROOT/"private")
+    parser.add_argument("--desktop",action="store_true",help="One desktop window for startup and saved AI status")
     args=parser.parse_args()
+    if args.desktop and status is None:
+        from desktop_start import run
+        return run(lambda callback,event:main(status=callback,stop=event),args.data_dir)
+    def report(stage,message,url=None):
+        if status:status(stage,message,url)
+    def active():
+        if stop is not None and stop.is_set():raise KeyboardInterrupt()
+    def pause(seconds):
+        if stop is None:time.sleep(seconds)
+        elif stop.wait(seconds):raise KeyboardInterrupt()
+    active()
     if not 1024 <= args.port <= 65535:
         raise ValueError("Некорректный порт.")
     if check_local(args.port):
@@ -84,23 +96,27 @@ def main():
     (args.data_dir/"server-url.txt").unlink(missing_ok=True)
     # Verify/download before starting the API, so failures leave no stray process.
     executable = None if args.local_only else tunnel_binary(args.data_dir/"tools")
+    active()
     backend = subprocess.Popen([sys.executable,"-B","-u",str(ROOT/"backend.py"),"--port",str(args.port),"--database",str(args.data_dir/"ledger.sqlite3")],cwd=ROOT)
     tunnel = None
     try:
         deadline=time.monotonic()+15
         while not check_local(args.port):
+            active()
             if backend.poll() is not None or time.monotonic()>deadline:
                 raise ValueError("Не удалось запустить API. Проверь сообщение сервера выше.")
-            time.sleep(.2)
+            pause(.2)
         print("TRED API: OK. Без подписи Telegram личные данные недоступны.",flush=True)
+        report('server','Сервер запущен')
         if args.check:
             print(json.dumps({"local_api_verified":True,"public_tunnel_verified":False}))
             return
         if args.local_only:
             print("Локальный режим. Для телефона нужен HTTPS-туннель.",flush=True)
-            backend.wait()
+            while backend.poll() is None:active();pause(.5)
             return
         print("Подключаем внешний адрес Cloudflare по HTTP/2…",flush=True)
+        report('tunnel','Подключаем доступ для Telegram и телефона…')
         tunnel=subprocess.Popen(tunnel_command(executable,args.port),cwd=ROOT,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,encoding="utf-8",errors="replace")
         output=queue.Queue(maxsize=256)
         diagnostic={"protocol":"http2","stage":"waiting_for_address","url_assigned":False,"channel":"WAITING","https":"NOT_CHECKED"}
@@ -130,6 +146,7 @@ def main():
         deadline=time.monotonic()+60
         url=None
         while time.monotonic()<deadline:
+            active()
             try: line=output.get(timeout=1)
             except queue.Empty: continue
             if line is None: break
@@ -143,16 +160,18 @@ def main():
         diagnostic.update(stage="checking_https",url_assigned=True)
         print("Адрес выдан. Проверяем HTTPS-доступ; результат будет виден ниже.",flush=True)
         for attempt in range(18):
+            active()
             drain()
             if tunnel.poll() is not None:break
             diagnostic["https"]=public_probe(url)
             if diagnostic["https"]=="OK":break
             if attempt%3==0:
                 print("Проверка HTTPS: "+diagnostic["https"]+"; канал: "+diagnostic["channel"],flush=True)
-            time.sleep(1)
+            pause(1)
         drain()
         if can_wait_for_client(diagnostic["https"],diagnostic["channel"]) and tunnel.poll() is None and backend.poll() is None:
             diagnostic["stage"]="waiting_for_client_dns";record()
+            report('waiting','Туннель подключён, но ПК пока не подтвердил HTTPS. Адрес можно проверить в боте с телефона.',url)
             print("\nТуннель подключён. Windows пока не находит IP-адрес сервера.",flush=True)
             print("Адрес для проверки с телефона (доступ пока НЕ подтверждён):\n"+url,flush=True)
             print("В Telegram на телефоне: TRED → Кабинет → Подключить кабинет.\nВставь адрес выше. Приложение само проверит HTTPS и подпись Telegram.\nЕсли не подключится, попробуй на телефоне мобильный интернет вместо Wi-Fi.\nОставь это окно открытым. Ctrl+C — остановить сервер.",flush=True)
@@ -160,7 +179,7 @@ def main():
             # Keep the existing route alive while a client on another network
             # performs its own full HTTPS + signed identity verification.
             while tunnel.poll() is None and backend.poll() is None:
-                time.sleep(5)
+                pause(5)
                 drain()
                 if tunnel.poll() is not None or backend.poll() is not None:break
                 diagnostic["https"]=public_probe(url)
@@ -175,10 +194,12 @@ def main():
             raise ValueError("HTTPS-доступ не подтверждён: "+diagnostic["https"]+"; канал: "+diagnostic["channel"]+". Диагностика: "+str(args.data_dir/"tunnel-diagnostics.json"))
         diagnostic["stage"]="ready";record()
         (args.data_dir/"server-url.txt").write_text(url+"\n",encoding="utf-8")
+        report('ready','TRED готов. Запросы к ИИ отправляются из бота автоматически.',url)
         print("\nВ кабинете TRED нажми «Подключить кабинет» и вставь:\n"+url,flush=True)
-        print("Этот же адрес и одноразовый код укажи в модуле браузера.\nНе закрывай это окно, компьютер и вкладку Pocket Option.\nПосле нового запуска адрес может измениться. Ctrl+C — остановить.",flush=True)
+        print("Расширение на этом ПК найдёт сервер автоматически. При первом подключении нужен только код из кабинета.\nНе закрывай TRED, компьютер и вкладку Pocket Option.\nПосле нового запуска внешний адрес для бота может измениться. Ctrl+C — остановить.",flush=True)
         # Drain logs without retaining or displaying arbitrary tunnel output.
         while tunnel.poll() is None and backend.poll() is None:
+            active()
             try:consume(output.get(timeout=1))
             except queue.Empty: pass
         diagnostic["stage"]="connection_closed";diagnostic["exit_code"]=tunnel.poll();record()

@@ -3,7 +3,7 @@ const $=s=>document.querySelector(s);
 let editing=false,hydrated=false,pairing=false,changingClock=false,marketClock="utc",accountTarget=null,confirmingCurrency=false;
 let identityTarget=null,identityFormKey=null,confirmingIdentity=false;
 let activeTabId=null;
-const UI_VERSION="0.4.2";
+const UI_VERSION="0.4.3";
 const labels={account:"баланс",asset:"каталог пар",quote:"котировки",candle:"свечи",trade:"сделки",feed:"состояние канала",history_status:"диагностика истории"};
 function outdated(){
   $("#connection").textContent="Окно обновилось, а фоновый модуль ещё работает в другой версии. Нажми «Перезапустить модуль», затем открой TRED снова.";
@@ -26,14 +26,14 @@ async function status(){
   $("#form").hidden=paired&&!editing;
   $("#change").hidden=!paired||editing;
   $("#disconnect").hidden=!s.paired;
-  if(!hydrated){$("#base").value=s.base||"";hydrated=true;}
+  if(!hydrated){$("#base").value=s.base||"http://127.0.0.1:8790";hydrated=true;}
   $("#status").textContent=!s.paired?"Передача данных начнётся после привязки.":s.lastError?"Передача данных: "+s.lastError:s.lastSeen?"Последняя передача принята сервером: "+new Date(s.lastSeen).toLocaleTimeString():paired?"Ожидаем поддерживаемые события. Обнови график Pocket Option.":"";
   $("#received").textContent=s.paired&&s.receivedKinds?.length?"Сервер принял: "+s.receivedKinds.map(x=>labels[x]).filter(Boolean).join(", ")+".":"";
   const scanner=s.scannerStatus;
   const scanLabels={no_tab:"Открой Pocket Option на вкладке с графиком.",no_socket:"Рыночный канал пока не найден. Обнови вкладку Pocket Option один раз.",waiting_catalog:"Ждём каталог открытого рыночного канала.",request_failed:"Не удалось получить задание сбора. Сверь адрес в расширении с текущим окном сервера TRED.",unsupported_module:"Обнови модуль и вкладку Pocket Option."};
   $("#market-delivery").hidden=!paired;
   $("#market-delivery").textContent=!paired?"":!scanner?"Ожидаем статус сборщика рынка…":Date.now()-scanner.updated_at>20000?"Сборщик давно не отвечал. Проверь, что Pocket Option открыт и адрес сервера актуален.":scanner.code==="ready"?`Сборщик активен: заданий для пар ${scanner.pairs}. Это не число готовых графиков.`:scanLabels[scanner.code]||"Ожидаем данные рынка.";
-  if(paired&&scanner?.dedicated)$("#market-delivery").textContent+=" Открыта служебная вкладка для получения нативной истории. Её можно закрыть, чтобы остановить этот сбор.";
+  if(paired&&scanner?.dedicated)$("#market-delivery").textContent+=" Служебная вкладка поддерживает графики готовыми между запросами. Закрой её, чтобы приостановить сбор.";
   if(paired&&scanner?.paused)$("#market-delivery").textContent="Служебная вкладка закрыта. Новый запрос сигнала возобновит сбор в новой служебной вкладке.";
   $("#balance-delivery").textContent=s.paired&&s.lastBalance?"Последний баланс принят: "+new Date(s.lastBalance.received_at).toLocaleTimeString()+" · "+(s.lastBalance.mode==="demo"?"демосчёт":"реальный счёт"):"";
   $("#terminal-reader-status").textContent=!paired?"":s.terminalCode==="ready"?"Видимый баланс терминала распознан.":s.terminalCode?"Блок баланса пока не распознан. Передача поддерживаемых событий Pocket продолжается.":"Подключаем чтение открытого терминала…";

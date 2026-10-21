@@ -8,7 +8,7 @@
 <p id="connection" role="status"></p>
 <button id="reload-module" type="button" hidden>Перезапустить модуль</button>
 <form id="form">
-  <label>HTTPS-адрес TRED<input id="base" type="url" placeholder="https://…trycloudflare.com" required></label>
+  <label>Сервер TRED · этот компьютер<input id="base" type="url" placeholder="http://127.0.0.1:8790" required></label>
   <label>Одноразовый код из кабинета<input id="code" minlength="24" maxlength="24" required autocomplete="off"></label>
   <button>Связать кабинет</button><p id="pair-error" role="alert"></p>
 </form>
@@ -49,7 +49,7 @@
   <p id="clock-error" role="alert"></p>
 </section>
 <button id="disconnect" type="button" hidden>Отключить модуль</button>
-<small id="module-version">Модуль 0.4.2</small>
+<small id="module-version">Модуль 0.4.3</small>
 <small>После обновления модуля обнови вкладку Pocket Option. Держи компьютер, сервер и график открытыми. Если Windows показывает неверное время, используй «Синхронизировать сейчас» в настройках часов.</small>
 <script src="popup.js"></script>
 </html>

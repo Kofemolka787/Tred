@@ -2,7 +2,7 @@
 // The pairing token stays in the worker. Only bounded market-data plans enter
 // the page; it receives no API key, broker credential, token or arbitrary code.
 globalThis.TredScan=(()=>{
-  const feeds=new Map();let running=false,lastPoll=0,code="no_socket";
+  const feeds=new Map();let running=false,lastPoll=0,lastLocalProbe=0,code="no_socket";
   const validFeed=v=>typeof v==="string"&&/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(v);
   const terminal=t=>Number.isInteger(t?.id)&&/^https:\/\/([a-z0-9-]+\.)*pocketoption\.com\/(?:[a-z]{2}\/)?cabinet(?:\/|[?#]|$)/i.test(t.url||t.pendingUrl||"");
   const collector=t=>terminal(t)&&new URL(t.url||t.pendingUrl).searchParams.get("tred_scanner")==="1";
@@ -29,9 +29,8 @@ globalThis.TredScan=(()=>{
   async function ensureScanner(tabs,plan,stored){
     const id=stored.scannerTabId;
     if(Number.isInteger(id)&&await isCollector(tabs.find(t=>t.id===id))){
-      if(Number.isInteger(plan.scan_id)&&stored.scannerJobId!==plan.scan_id&&chrome.tabs.reload){
+      if(Number.isInteger(plan.scan_id)&&stored.scannerJobId!==plan.scan_id){
         await chrome.storage.local.set({scannerJobId:plan.scan_id});
-        await chrome.tabs.reload(id);
       }
       return id;
     }
@@ -73,8 +72,19 @@ globalThis.TredScan=(()=>{
     try{
       const stored=await chrome.storage.local.get(["base","token","needsPairing","marketClock","scannerTabId","scannerJobId","scannerPausedJob","scannerPaused"]);
       if(!stored.base||!stored.token||stored.needsPairing)return;
-      const base=endpoint(stored.base),token=stored.token;
-      const value=await post(base,"/api/bridge/scan",{code},token);
+      let base=endpoint(stored.base),value;const token=stored.token,local="http://127.0.0.1:8790";
+      // Only a saved, authorized bridge token can adopt this fixed loopback
+      // endpoint. The URL/token never enter the broker page or model input.
+      if(base!==local&&Date.now()-lastLocalProbe>=30000){
+        lastLocalProbe=Date.now();
+        try{
+          const found=await post(local,"/api/bridge/scan",{code},token,1500);
+          if(found?.ok===true&&found.plan?.version===1&&Array.isArray(found.plan.pairs)){
+            value=found;base=local;await chrome.storage.local.set({base:local});
+          }
+        }catch(_){/* Another server cannot accept this token; retain the saved route. */}
+      }
+      if(!value)value=await post(base,"/api/bridge/scan",{code},token);
       if(!value.ok||!value.plan||value.plan.version!==1||!Array.isArray(value.plan.pairs)||value.plan.pairs.length>2000)throw Error("scan response");
       const tabs=await chrome.tabs.query({url:["https://pocketoption.com/*","https://*.pocketoption.com/*"]});
       const scannerTab=await ensureScanner(tabs,value.plan,stored);
@@ -103,7 +113,7 @@ globalThis.TredScan=(()=>{
           if(plan.dedicated&&typeof document!=="undefined"&&document.body){
             let banner=document.getElementById('tred-collector-banner');
             if(!banner){banner=document.createElement('div');banner.id='tred-collector-banner';banner.style.cssText='position:fixed;top:0;left:0;right:0;z-index:2147483647;padding:10px;background:#171128;color:#eee;font:14px sans-serif;text-align:center';document.body.append(banner);}
-            banner.textContent=plan.scanner_active?'TRED: автоматический сбор графиков. Для ручной работы используй основную вкладку Pocket Option.':'TRED: сбор графиков приостановлен до следующего запроса.';
+            banner.textContent=plan.scanner_active?'TRED: графики обновляются в фоне, в том числе между запросами сигналов. Для ручной работы используй основную вкладку Pocket Option.':'TRED: нет подходящих открытых пар. Ждём обновление каталога.';
           }
           return window.__tredMarketScanner?.plan(plan)||{code:"unsupported_module"};
         },args:[{...value.plan,pairs:work,dedicated:tabId===scannerTab,offset:stored.marketClock==="po-utc2"?7200:0}]});

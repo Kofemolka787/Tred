@@ -3,7 +3,7 @@
 // The foreground terminal keeps the passive/advanced-history path. No orders,
 // login frames, account changes or credential APIs are available here.
 (()=>{
-  const VERSION="0.4.2";
+  const VERSION="0.4.3";
   if(window.__tredMarketScanner?.version===VERSION)return;
   window.__tredMarketScanner?.stop();
   const sockets=new Map(),attempts=new Map(),pending=new Map();
@@ -31,7 +31,7 @@
     }
     // Unvisited work wins over retries, so one unsupported instrument cannot
     // keep the rest of a large catalog waiting forever.
-    const sorted=[...wanted].sort((a,b)=>(b.priority&&b.period===1?1:0)-(a.priority&&a.period===1?1:0)||(attempts.get(key(a))||0)-(attempts.get(key(b))||0));
+    const sorted=[...wanted].sort((a,b)=>Number(!!a.background)-Number(!!b.background)||(b.priority&&b.period===1?1:0)-(a.priority&&a.period===1?1:0)||(attempts.get(key(a))||0)-(attempts.get(key(b))||0));
     const quotes=sorted.filter(t=>t.period===1),other=sorted.filter(t=>t.period!==1);
     // Share the paced request budget between quotes and other work. Repeated
     // silent subscriptions or candle refreshes cannot consume every turn.
@@ -91,6 +91,7 @@
     const tasks=[];
     for(const row of value.pairs){
       if(!row||!pair(row.symbol)||!feed(row.feed_id)||!Array.isArray(row.history)||row.history.length>2)return {code:"request_failed"};
+      if(row.warm_history!==undefined&&(!Array.isArray(row.warm_history)||row.warm_history.length>3))return {code:"request_failed"};
       if(row.quote!==undefined&&typeof row.quote!=="boolean")return {code:"request_failed"};
       if(row.priority!==undefined&&typeof row.priority!=="boolean")return {code:"request_failed"};
       const priority=row.priority===true;
@@ -102,10 +103,12 @@
       // A short period-1 history contains real timestamped ticks. It does not
       // change the visible chart, and is never interpreted as OHLC research.
       if(row.quote!==false)tasks.push({symbol:row.symbol,feed_id:row.feed_id,period:1,bars:20,priority});
-      for(const h of row.history){
+      const history=row.history.map(h=>({...h,background:false})).concat((row.warm_history||[]).map(h=>({...h,background:true})));
+      if(new Set(history.map(h=>h.period)).size!==history.length)return {code:"request_failed"};
+      for(const h of history){
         if(!h||![60,120,300,600,900].includes(h.period)||![5,160].includes(h.bars))return {code:"request_failed"};
         if(h.before!==undefined&&(!Number.isSafeInteger(h.before)||h.bars!==160||h.before>Date.now()/1000||h.before<Date.now()/1000-1600*h.period||h.before%h.period>1))return {code:"request_failed"};
-        tasks.push({symbol:row.symbol,feed_id:row.feed_id,period:h.period,bars:h.bars,priority,...(h.before===undefined?{}:{before:h.before})});
+        tasks.push({symbol:row.symbol,feed_id:row.feed_id,period:h.period,bars:h.bars,priority,background:h.background,...(h.before===undefined?{}:{before:h.before})});
       }
     }
     wanted=tasks;until=value.until;offset=value.offset;dedicated=value.dedicated===true;stopped=false;schedule();

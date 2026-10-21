@@ -111,10 +111,18 @@ def run(source=SOURCE,base=None,*,check=False,port=8790):
         print("TRED: рабочие файлы сохраняются в личной папке пользователя.",flush=True)
         if not python.is_file():
             subprocess.run([sys.executable,"-m","venv",str(environment)],check=True,cwd=base)
-        subprocess.run([str(python),"-m","pip","install","--disable-pip-version-check","--only-binary=:all:","--require-hashes","-r",str(app/"requirements-web.txt")],check=True,cwd=base)
+        requirements=hashlib.sha256((app/'requirements-web.txt').read_bytes()).hexdigest()
+        marker=environment/'requirements.ready'
+        installed=marker.is_file() and marker.read_text().strip()==requirements
+        if installed:
+            installed=subprocess.run([str(python),'-c','import cryptography'],cwd=base,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL).returncode==0
+        if not installed:
+            subprocess.run([str(python),"-m","pip","install","--disable-pip-version-check","--only-binary=:all:","--require-hashes","-r",str(app/"requirements-web.txt")],check=True,cwd=base)
+            marker.write_text(requirements+'\n')
         command=[str(python),"-B",str(app/"free_start.py"),"--data-dir",str(data_dir),"--port",str(port)]
         if check:
             command += ["--local-only","--check"]
+        elif os.name=='nt':command+=['--desktop']
         return subprocess.run(command,cwd=app).returncode
 
 

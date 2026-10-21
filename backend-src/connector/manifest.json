@@ -1,13 +1,14 @@
 {
   "manifest_version": 3,
   "name": "TRED · связь с Pocket Option",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "description": "Автоматически собирает котировки и историю доступных пар для TRED. Торговых команд нет.",
   "permissions": [
     "storage",
     "scripting"
   ],
   "host_permissions": [
+    "http://127.0.0.1:8790/*",
     "https://*.trycloudflare.com/*",
     "https://pocketoption.com/*",
     "https://*.pocketoption.com/*"

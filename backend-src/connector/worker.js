@@ -1,13 +1,14 @@
 "use strict";
 importScripts("time-check.js","account-check.js","scan-worker.js");
-const WORKER_VERSION="0.4.2";
+const WORKER_VERSION="0.4.3";
 const endpoint=value=>{
   const u=new URL(value);
+  if(u.origin==="http://127.0.0.1:8790"&&u.pathname==="/"&&!u.username&&!u.password&&!u.search&&!u.hash)return u.origin;
   if(u.protocol!=="https:"||!/^[a-z0-9-]+\.trycloudflare\.com$/.test(u.hostname)||u.port||u.username||u.password||u.search||u.hash||u.pathname!=="/")throw new Error("Укажи HTTPS-адрес своего TRED-туннеля.");
   return u.origin;
 };
-async function post(base,path,body,token){
-  const response=await fetch(base+path,{method:"POST",headers:{"Content-Type":"application/json",...(token?{Authorization:"Bearer "+token}:{})},body:JSON.stringify(body),signal:AbortSignal.timeout(10000),redirect:"error",credentials:"omit"});
+async function post(base,path,body,token,timeout=10000){
+  const response=await fetch(base+path,{method:"POST",headers:{"Content-Type":"application/json",...(token?{Authorization:"Bearer "+token}:{})},body:JSON.stringify(body),signal:AbortSignal.timeout(timeout),redirect:"error",credentials:"omit"});
   let result;
   try{result=await response.json();}
   catch(_){throw new Error("Вместо API получена страница (HTTP "+response.status+"). Проверь адрес из текущего окна сервера TRED.");}
@@ -135,7 +136,7 @@ async function flush(){
       }catch(error){
         if(epoch!==generation)return;
         backlogDelay=1000;
-        lastError=error.status===400&&error.message==="Пакет содержит неподдерживаемые поля."?"Сервер не поддерживает данные модуля. Обнови весь пакет TRED 0.4.2 и перезапусти сервер.":error.message.slice(0,200);
+        lastError=error.status===400&&error.message==="Пакет содержит неподдерживаемые поля."?"Сервер не поддерживает данные модуля. Обнови весь пакет TRED 0.4.3 и перезапусти сервер.":error.message.slice(0,200);
         if(kind==="account"&&(!error.status||error.status===429||error.status>=500))for(const event of accepted)retryAccounts.set(TredAccount.key(event),accountSources.get(TredAccount.key(event)));
         if(kind!=="account"&&(!error.status||error.status===429||error.status>=500)){
           // Keep the original source event, including its clock tag and time.

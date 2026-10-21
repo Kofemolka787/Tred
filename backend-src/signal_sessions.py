@@ -50,6 +50,10 @@ class SignalSessions:
                     prefs,_,histories=self._market(db,uid)
                     current,_=rank([{**dict(asset),'expiries':json.loads(asset['expiries'])}],histories,expiry=signal['expiry'],market=signal['market'],symbol=signal['symbol'],allow_otc=signal['market']=='otc',now=now,min_payout=signal.get('min_payout',.85),signal_mode=signal.get('signal_mode','strict'))
                     current=[c for c in current if same_setup(c,signal)]
+                    if not current:
+                        from entry_validation import revalidate_early
+                        checked,_=revalidate_early(signal,{**dict(asset),'expiries':json.loads(asset['expiries'])},histories,prefs,now)
+                        if checked:current=[checked]
                 if not current:
                     raise DomainError("Закрылась новая свеча и прежний сценарий не подтверждён. Обнови анализ перед входом.", 409)
             entry = value.get("entry_price", price)
