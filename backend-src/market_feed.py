@@ -14,7 +14,7 @@ CREATE INDEX IF NOT EXISTS candles_feed_lookup ON candles(user_id,symbol,period,
 
 def migrate(db):
     columns = {r[1] for r in db.execute("PRAGMA table_info(assets)")}
-    for name, kind in (("catalog_feed", "TEXT"), ("quote_feed", "TEXT"), ("feed_connected", "INTEGER NOT NULL DEFAULT 0"), ("history_status", "TEXT"), ("history_scoped", "INTEGER NOT NULL DEFAULT 0")):
+    for name, kind in (("catalog_feed", "TEXT"), ("quote_feed", "TEXT"), ("feed_connected", "INTEGER NOT NULL DEFAULT 0"), ("history_status", "TEXT"), ("history_scoped", "INTEGER NOT NULL DEFAULT 0"), ("source_role", "TEXT NOT NULL DEFAULT 'terminal'")):
         if name not in columns:
             db.execute(f"ALTER TABLE assets ADD COLUMN {name} {kind}")
     if "origin" not in {r[1] for r in db.execute("PRAGMA table_info(candles)")}:

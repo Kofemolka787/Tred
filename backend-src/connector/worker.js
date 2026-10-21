@@ -1,6 +1,6 @@
 "use strict";
 importScripts("time-check.js","account-check.js","scan-worker.js");
-const WORKER_VERSION="0.3.15";
+const WORKER_VERSION="0.4.0";
 const endpoint=value=>{
   const u=new URL(value);
   if(u.protocol!=="https:"||!/^[a-z0-9-]+\.trycloudflare\.com$/.test(u.hostname)||u.port||u.username||u.password||u.search||u.hash||u.pathname!=="/")throw new Error("Укажи HTTPS-адрес своего TRED-туннеля.");
@@ -17,7 +17,7 @@ async function post(base,path,body,token){
   return result;
 }
 chrome.storage.local.setAccessLevel({accessLevel:"TRUSTED_CONTEXTS"});
-const eventFields={account:["type","mode","account_id","currency","balance","time","source_stream","id_status","id_shape","source_account","account_source"],asset:["type","symbol","market","is_open","payout","expiries","time","feed_id","history_scoped"],quote:["type","symbol","price","time","source_clock","feed_id"],candle:["type","symbol","period","time","open","high","low","close","source_clock","origin","feed_id"],feed:["type","feed_id","connected","time"],history_status:["type","symbol","event","period","rows","bars","code","time"],trade:["type","mode","account_id","id","symbol","direction","stake","opened_at","expires_at","closed_at","pnl","status","time"]};
+const eventFields={account:["type","mode","account_id","currency","balance","time","source_stream","id_status","id_shape","source_account","account_source"],asset:["type","symbol","market","is_open","payout","expiries","time","feed_id","history_scoped","source_role"],quote:["type","symbol","price","time","source_clock","feed_id"],candle:["type","symbol","period","time","open","high","low","close","source_clock","origin","feed_id"],feed:["type","feed_id","connected","time"],history_status:["type","symbol","event","period","rows","bars","code","time"],trade:["type","mode","account_id","id","symbol","direction","stake","opened_at","expires_at","closed_at","pnl","status","time"]};
 let queue=[],sending=false,timer,generation=0;
 // Large candle histories must not delay or evict live balance/price changes.
 const priority=event=>({account:0,feed:0,trade:1,asset:2,quote:3,candle:4}[event?.type]??5);
@@ -135,7 +135,7 @@ async function flush(){
       }catch(error){
         if(epoch!==generation)return;
         backlogDelay=1000;
-        lastError=error.status===400&&error.message==="Пакет содержит неподдерживаемые поля."?"Сервер не поддерживает данные модуля. Обнови весь пакет TRED 0.3.25 и перезапусти сервер.":error.message.slice(0,200);
+        lastError=error.status===400&&error.message==="Пакет содержит неподдерживаемые поля."?"Сервер не поддерживает данные модуля. Обнови весь пакет TRED 0.4.0 и перезапусти сервер.":error.message.slice(0,200);
         if(kind==="account"&&(!error.status||error.status===429||error.status>=500))for(const event of accepted)retryAccounts.set(TredAccount.key(event),accountSources.get(TredAccount.key(event)));
         if(kind!=="account"&&(!error.status||error.status===429||error.status>=500)){
           // Keep the original source event, including its clock tag and time.
@@ -260,7 +260,8 @@ chrome.runtime.onMessage.addListener((message,sender,reply)=>{
       await flush();await TredScan.sync(post,endpoint);return {ok:true};
     }
     if(message.action==="events"&&fromPocket(sender)&&Array.isArray(message.events)){
-      const events=message.events.slice(0,250).filter(event=>{
+      const epoch=generation;
+      const events=await TredScan.tag(message.events.slice(0,250).filter(event=>{
         if(event&&Object.hasOwn(event,"account_source"))return false;
         if(event?.type==="account"&&TredAccount.mode(event.mode)&&Object.keys(event).every(k=>eventFields.account.includes(k))&&(event.source_account==null||TredAccount.sourceAccount(event.source_account)))tabAccounts.set(sender.tab.id+":"+event.mode,{account_id:event.account_id,source_account:event.source_account??null});
         while(tabAccounts.size>20)tabAccounts.delete(tabAccounts.keys().next().value);
@@ -270,7 +271,8 @@ chrome.runtime.onMessage.addListener((message,sender,reply)=>{
         streamTabs.set(event.source_stream,sender.tab.id);
         while(streamTabs.size>20)streamTabs.delete(streamTabs.keys().next().value);
         return true;
-      });
+      }),sender);
+      if(epoch!==generation)return {ok:false};
       TredScan.remember(events,sender);
       queue.push(...events);
       // A queued catalog must not revive its socket after close was delivered
@@ -304,3 +306,7 @@ async function attachOpenTerminals(){
 }
 chrome.runtime.onInstalled?.addListener(()=>{void attachOpenTerminals();});
 chrome.runtime.onStartup?.addListener(()=>{void attachOpenTerminals();});
+chrome.tabs?.onRemoved?.addListener(tabId=>{
+  const epoch=generation;
+  void TredScan.removed(tabId,post,endpoint,events=>{if(epoch===generation){queue.push(...events);boundQueue();schedule();}});
+});

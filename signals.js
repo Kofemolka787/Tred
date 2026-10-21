@@ -120,7 +120,7 @@ window.TredSignals=(()=>{
       strategyHelp.hidden=!feed?.strategy_catalog?.length;strategies.replaceChildren();
       for(const s of feed?.strategy_catalog||[]){const row=node("p");row.append(node("strong","",s.name),node("span",""," — "+s.rule),node("small","","Слабость: "+s.weakness));strategies.append(row);}
     }
-    $("#signals-upgrade").hidden=state.mode!=="api"||state.market_data_version===5&&!!feed?.strategy_catalog?.length;
+    $("#signals-upgrade").hidden=state.mode!=="api"||state.market_data_version===6&&!!feed?.strategy_catalog?.length;
     $("#ai-status").textContent=state.mode!=="api"?"ИИ подключается к твоему серверу TRED.":state.ai?.configured?`ИИ: ${state.ai.provider} · ${state.ai.model}. Ключ настроен; решение проверяется по свежим данным.`:"ИИ ещё не настроен. Запусти SETUP-LUNAROUTE.cmd на компьютере и введи ключ LunaRoute локально.";
     const help=$("#feed-help");
     if(feed?.blocked){

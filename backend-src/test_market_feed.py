@@ -128,6 +128,21 @@ class MarketFeedTests(unittest.TestCase):
         with self.ledger.db() as db:b=dict(db.execute('SELECT * FROM candles ORDER BY time LIMIT 1').fetchone())
         self.assertEqual(b['origin'],'broker');self.assertEqual(b['close'],106.4)
 
+    def test_dedicated_scanner_source_is_not_overwritten_by_foreground_catalogs(self):
+        self.ingest({**self.asset,'feed_id':OTHER,'source_role':'scanner','history_scoped':True})
+        self.now+=1
+        self.ingest({**self.asset,'time':self.now},self.quote())
+        with self.ledger.db() as db:
+            row=dict(db.execute('SELECT * FROM assets').fetchone())
+        self.assertEqual(row['catalog_feed'],OTHER)
+        self.assertEqual(row['source_role'],'scanner')
+        self.ingest(self.quote(feed_id=OTHER))
+        self.assertTrue(self.state()['feed']['eligible'])
+        self.ingest({'type':'feed','feed_id':OTHER,'connected':False,'time':self.now})
+        self.now+=1;self.ingest({**self.asset,'time':self.now},self.quote())
+        with self.ledger.db() as db:self.assertEqual(db.execute('SELECT source_role FROM assets').fetchone()[0],'terminal')
+        with self.assertRaises(DomainError):self.ingest({**self.asset,'source_role':'invented'})
+
     def test_partial_and_gapped_ticks_do_not_become_fabricated_candles(self):
         initial=self.now
         for seconds in (10,15,30,35,40,45,50,55,60):

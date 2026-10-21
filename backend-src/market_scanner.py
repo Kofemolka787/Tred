@@ -88,8 +88,10 @@ class MarketScanner:
                 priority=a['symbol'] in watched
                 # Focused instruments keep a task present even between polls;
                 # MAIN skips it while its own genuine tick is <=5 seconds old.
-                rows.append({"symbol": a["symbol"], "feed_id": a["catalog_feed"], "history": needed, "quote": priority or not quoted,"priority":priority})
-            return {"ok": True, "plan": {"version": 1, "until": now + 15, "pairs": rows, "total": len(candidates)}}
+                rows.append({"symbol": a["symbol"], "feed_id": a["catalog_feed"], "history": needed, "quote": priority or not quoted,"priority":priority,"chart_period":frames[0]})
+            active=db.execute("SELECT id FROM scan_jobs WHERE user_id=? AND status IN ('loading','ai') AND started_at>? ORDER BY id DESC LIMIT 1",(uid,now-240)).fetchone()
+            return {"ok": True, "plan": {"version": 1, "until": now + 15, "pairs": rows, "total": len(candidates),
+                                        "scan_id":active[0] if active else None,"scanner_active":bool(active or watched)}}
 
     def _scan_progress(self, db, uid, prefs, assets, histories, now):
         eligible = pool(assets, prefs)

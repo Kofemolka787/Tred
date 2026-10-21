@@ -2,14 +2,14 @@
 // Observes data and connects the bounded read-only market scanner to the
 // existing socket. Login, cookies and outgoing auth frames are never copied.
 (() => {
-  if(window.__tredObserverVersion==="0.3.15")return;
-  window.__tredObserverVersion="0.3.15";
+  if(window.__tredObserverVersion==="0.4.0")return;
+  window.__tredObserverVersion="0.4.0";
   const Native = window.WebSocket;
   const contexts=new WeakMap();
   const number = v => typeof v === "number" && Number.isFinite(v);
   const safeSymbol = v => typeof v === "string" && /^[A-Za-z0-9][A-Za-z0-9_./ #-]{1,31}$/.test(v);
   const ts = v => number(v) ? (v > 1e11 ? v / 1000 : v) : null;
-  const emit = events => { for(let i=0;i<events.length;i+=250) window.postMessage({source:"tred-observer-v1",observer_version:"0.3.15",events:events.slice(i,i+250)},location.origin); };
+  const emit = events => { for(let i=0;i<events.length;i+=250) window.postMessage({source:"tred-observer-v1",observer_version:"0.4.0",events:events.slice(i,i+250)},location.origin); };
   const accountId = value => (typeof value === "string" || typeof value === "number" && Number.isSafeInteger(value)) && /^\d{1,20}$/.test(String(value)) && !/^0+$/.test(String(value)) ? String(value) : null;
   const idType = value => value===undefined?"none":value===null||value===""?"empty":value===0||typeof value==="string"&&/^0+$/.test(value)?"zero":accountId(value)?typeof value==="number"?"integer":"digits":Array.isArray(value)?"array":["number","string","boolean","object"].includes(typeof value)?typeof value==="string"?"text":typeof value:"other";
   const identity = async (name,data) => {
@@ -40,16 +40,35 @@
     return {uid:null,field:opaqueUid?"opaque-uid":secondary.length>1?"ambiguous-account":null,status:secondary.length>1?"ambiguous":opaque?"unsupported":"missing",present,shape,fingerprint,sourceAccount};
   };
   const currency = value => value == null ? null : typeof value === "string" && /^[A-Za-z]{3}$/.test(value) ? value.toUpperCase() : "unsupported";
-  const historyNames=["loadHistoryPeriod","loadHistoryPeriodFast","updateHistoryNew","updateHistoryNewFast","candles","history"];
+  const historyNames=["loadHistoryPeriod","loadHistoryPeriodFast","updateHistory","updateHistoryNew","updateHistoryNewFast","candles","history"];
+  const requestIndex=value=>typeof value==="string"&&/^\d{1,15}$/.test(value)?Number(value):value;
+  function historyArrays(data){
+    const arrays=[data.candles,data.data,data.history].filter(Array.isArray);
+    const times=data.timestamps??data.t;
+    if(Array.isArray(times)&&times.length<=60000&&[data.o,data.h,data.l,data.c].every(a=>Array.isArray(a)&&a.length===times.length)){
+      arrays.push(times.map((time,i)=>({time,open:data.o[i],high:data.h[i],low:data.l[i],close:data.c[i]})));
+    }
+    return arrays;
+  }
+  const isTickArray=r=>Array.isArray(r)&&(r.length===2||r.length===3&&r[2]===null);
+  function marketPayload(data,state){
+    if(!data||typeof data!=="object"||Array.isArray(data))return null;
+    const request=state.requests.get(requestIndex(data.index));
+    // An omitted asset/period can only come from an exact outgoing request
+    // index; the active chart or arrival order never supplies missing identity.
+    const asset=data.asset===undefined||data.asset===""?request?.asset:data.asset;
+    if(!safeSymbol(asset)||request&&request.asset!==asset)return null;
+    return {...data,asset};
+  }
   function historyPeriod(data,state){
     if(Number.isInteger(data.period))return data.period;
-    const index=typeof data.index==="string"&&/^\d{1,15}$/.test(data.index)?Number(data.index):data.index;
+    const index=requestIndex(data.index);
     const request=state.requests.get(index);
     if(request?.asset===data.asset)return request.period;
     // Unindexed Fast OHLC can prove its period through at least three
     // contiguous timestamps. A single bar, ticks, gaps or mixed spacing cannot.
     const periods=new Set();
-    for(const rows of [data.candles,data.data,data.history].filter(Array.isArray)){
+    for(const rows of historyArrays(data)){
       if(!rows.length)continue;
       const tail=rows.slice(-1600);
       const bars=tail.map(row=>Array.isArray(row)&&row.length>=5?{time:ts(row[0]),open:row[1],close:row[2],high:row[3],low:row[4]}:
@@ -64,7 +83,7 @@
     return periods.size===1?[...periods][0]:null;
   }
   function tickBars(rows){
-    const ticks=rows.slice(-60000).map(r=>Array.isArray(r)&&r.length===2?{time:ts(r[0]),price:r[1]}:r&&number(r.price)?{time:ts(r.time??r.timestamp),price:r.price}:null).filter(r=>r&&number(r.time)&&number(r.price)&&r.price>0).sort((a,b)=>a.time-b.time);
+    const ticks=rows.slice(-60000).map(r=>isTickArray(r)?{time:ts(r[0]),price:r[1]}:r&&number(r.price)?{time:ts(r.time??r.timestamp),price:r.price}:null).filter(r=>r&&number(r.time)&&number(r.price)&&r.price>0).sort((a,b)=>a.time-b.time);
     if(!ticks.length)return [];
     const groups=new Map();
     for(const t of ticks){const start=Math.floor(t.time/60)*60;let b=groups.get(start);
@@ -110,9 +129,10 @@
     if (name === "updateStream" && Array.isArray(data)) {
       for (const row of data) if (Array.isArray(row) && safeSymbol(row[0]) && number(row[1]) && number(row[2]) && row[2] > 0) events.push({type:"quote",symbol:row[0],time:ts(row[1]),price:row[2],feed_id:state.feed,source_clock:"po-market-native-v1"});
     }
-    if (historyNames.includes(name) && data && safeSymbol(data.asset)) {
+    if(historyNames.includes(name))data=marketPayload(data,state);
+    if (historyNames.includes(name) && data) {
       const period=historyPeriod(data,state);
-      const arrays=[data.candles,data.data,data.history].filter(Array.isArray);
+      const arrays=historyArrays(data);
       const before=events.length;
       let rowCount=0,ohlcRows=0;
       for(const rows of arrays){
@@ -126,9 +146,9 @@
       const accepted=events.length-before;
       // A tick carries an actual observed price/time. An OHLC close is never
       // passed off as a live quote merely because history just arrived.
-      const ticks=arrays.flatMap(rows=>rows.slice(-60000).map(r=>Array.isArray(r)&&r.length===2?{time:ts(r[0]),price:r[1]}:r&&number(r.price)?{time:ts(r.time??r.timestamp),price:r.price}:null)).filter(r=>r&&number(r.time)&&number(r.price)&&r.price>0);
+      const ticks=arrays.flatMap(rows=>rows.slice(-60000).map(r=>isTickArray(r)?{time:ts(r[0]),price:r[1]}:r&&number(r.price)?{time:ts(r.time??r.timestamp),price:r.price}:null)).filter(r=>r&&number(r.time)&&number(r.price)&&r.price>0);
       if(ticks.length){const last=ticks.reduce((a,b)=>a.time>b.time?a:b);events.push({type:"quote",symbol:data.asset,...last,feed_id:state.feed,source_clock:"po-market-native-v1"});}
-      window.__tredMarketScanner?.received(state,data,period);
+      window.__tredMarketScanner?.received(state,data,period,name);
       if(period!==1)events.push({type:"history_status",symbol:data.asset,event:name,period:Number.isInteger(period)&&period>0&&period<=86400?period:0,rows:Math.min(rowCount,60000),bars:Math.min(accepted,10000),code:accepted?ohlcRows?"ohlc":"ticks":!rowCount?"empty":period===null?"period_missing":![60,120,300,600,900].includes(period)?"unsupported_period":"format_unrecognized",time:now});
     }
 
@@ -182,20 +202,32 @@
           // and its binary payload; they must not consume that pending event.
           if(["2","3","40","41"].includes(frame))return;
           try {
-            if (pending) {
-              const binary = JSON.parse(frame);
-              const name = pending; pending = null;
-              await normalize(name,binary,state);
-            } else if (frame.startsWith("451-")) {
+            if (pending&&!frame.startsWith("42")&&!/^45[1-4]-/.test(frame)) {
+              pending.parts.push(JSON.parse(frame));
+              if(pending.parts.length<pending.count)return;
+              const message=pending;pending=null;
+              const restore=(value,depth=0)=>{
+                if(depth>12)throw Error('nested attachment');
+                if(value&&typeof value==="object"){
+                  if(value._placeholder===true){if(!Number.isInteger(value.num)||value.num<0||value.num>=message.parts.length)throw Error('attachment index');return message.parts[value.num];}
+                  if(Array.isArray(value))return value.map(v=>restore(v,depth+1));
+                  return Object.fromEntries(Object.entries(value).map(([k,v])=>[k,restore(v,depth+1)]));
+                }
+                return value;
+              };
+              const parsed=restore(message.payload);
+              await normalize(parsed[0],parsed[1],state);
+            } else if (/^45[1-4]-/.test(frame)) {
               const parsed = JSON.parse(frame.slice(4));
-              const allowed = ["successauth","successupdateBalance","balance","updateAssets","assets","updateStream","loadHistoryPeriod","loadHistoryPeriodFast","updateHistoryNew","updateHistoryNewFast","candles","history","successopenOrder","successcloseOrder","updateOpenedDeals","updateClosedDeals"];
-              pending = allowed.includes(parsed[0]) ? parsed[0] : "unsupported";
+              const allowed = ["successauth","successupdateBalance","balance","updateAssets","assets","updateStream",...historyNames,"successopenOrder","successcloseOrder","updateOpenedDeals","updateClosedDeals"];
+              if(Array.isArray(parsed))pending={payload:allowed.includes(parsed[0])?parsed:["unsupported",{_placeholder:true,num:0}],count:Number(frame[2]),parts:[]};
             } else if (frame.startsWith("42")) {
               const parsed = JSON.parse(frame.slice(2));
               await normalize(parsed[0],parsed[1],state);
             } else if (frame.startsWith("{")) {
               const parsed = JSON.parse(frame);
               if (parsed && Object.hasOwn(parsed,"balance")) await normalize("balance",parsed,state);
+              else if(parsed&&historyArrays(parsed).length&&(safeSymbol(parsed.asset)||state.requests.has(requestIndex(parsed.index))))await normalize("history",parsed,state);
             } else if (frame.startsWith("[")) {
               const parsed = JSON.parse(frame);
               if (Array.isArray(parsed) && safeSymbol(parsed[0]) && number(parsed[1]) && number(parsed[2])) await normalize("updateStream",[parsed],state);

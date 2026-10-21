@@ -328,7 +328,7 @@ class Ledger(SignalSessions, MarketScanner):
                   "asset": {"type","symbol","market","is_open","payout","time"},
                   "quote": {"type","symbol","price","time"},
                   "candle": {"type","symbol","period","time","open","high","low","close"}}
-        fields["asset"].update(("expiries","feed_id","history_scoped"))
+        fields["asset"].update(("expiries","feed_id","history_scoped","source_role"))
         fields["quote"].add("feed_id")
         fields["candle"].update(("origin","feed_id"))
         fields["feed"] = {"type","feed_id","connected","time"}
@@ -343,7 +343,7 @@ class Ledger(SignalSessions, MarketScanner):
         if "feed_id" in e and (not isinstance(feed_id,str) or not FEED_ID.fullmatch(feed_id)):
             raise DomainError("Неподдерживаемый идентификатор канала.")
         if kind == "history_status":
-            if e["event"] not in ("loadHistoryPeriod","loadHistoryPeriodFast","updateHistoryNew","updateHistoryNewFast","candles","history") or e["code"] not in ("ohlc","ticks","empty","period_missing","unsupported_period","format_unrecognized") or any(type(e[k]) is not int or not 0<=e[k]<=limit for k,limit in (("period",86400),("rows",60000),("bars",10000))):
+            if e["event"] not in ("loadHistoryPeriod","loadHistoryPeriodFast","updateHistory","updateHistoryNew","updateHistoryNewFast","candles","history") or e["code"] not in ("ohlc","ticks","empty","period_missing","unsupported_period","format_unrecognized") or any(type(e[k]) is not int or not 0<=e[k]<=limit for k,limit in (("period",86400),("rows",60000),("bars",10000))):
                 raise DomainError("Неподдерживаемая диагностика истории.")
             status={k:e[k] for k in ("event","period","rows","bars","code","time")}
             db.execute("UPDATE assets SET history_status=? WHERE user_id=? AND symbol=?",(json.dumps(status),uid,symbol(e["symbol"])))
@@ -396,8 +396,11 @@ class Ledger(SignalSessions, MarketScanner):
             scoped=e.get('history_scoped',False)
             if type(scoped) is not bool or scoped and not feed_id:
                 raise DomainError("Не определён источник истории графика.")
+            role=e.get('source_role','terminal')
+            if role not in ('terminal','scanner') or role=='scanner' and not feed_id:
+                raise DomainError("Не определён источник каталога.")
             old=db.execute('SELECT catalog_feed FROM assets WHERE user_id=? AND symbol=?',(uid,pair)).fetchone()
-            changed=db.execute("INSERT INTO assets(user_id,symbol,market,is_open,payout,updated_at,expiries,catalog_feed,feed_connected,history_scoped) VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(user_id,symbol) DO UPDATE SET market=excluded.market,is_open=excluded.is_open,payout=excluded.payout,updated_at=excluded.updated_at,expiries=excluded.expiries,catalog_feed=excluded.catalog_feed,feed_connected=excluded.feed_connected,history_scoped=excluded.history_scoped WHERE excluded.updated_at>assets.updated_at", (uid,pair,e["market"],int(e["is_open"]),payout,at,json.dumps(expiries),feed_id,int(feed_id is not None),int(scoped))).rowcount
+            changed=db.execute("INSERT INTO assets(user_id,symbol,market,is_open,payout,updated_at,expiries,catalog_feed,feed_connected,history_scoped,source_role) VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(user_id,symbol) DO UPDATE SET market=excluded.market,is_open=excluded.is_open,payout=excluded.payout,updated_at=excluded.updated_at,expiries=excluded.expiries,catalog_feed=excluded.catalog_feed,feed_connected=excluded.feed_connected,history_scoped=excluded.history_scoped,source_role=excluded.source_role WHERE (excluded.updated_at>assets.updated_at OR assets.feed_connected=0 OR (excluded.updated_at=assets.updated_at AND excluded.source_role='scanner' AND assets.source_role!='scanner')) AND (assets.source_role!='scanner' OR assets.feed_connected=0 OR excluded.source_role='scanner')", (uid,pair,e["market"],int(e["is_open"]),payout,at,json.dumps(expiries),feed_id,int(feed_id is not None),int(scoped),role)).rowcount
             if changed and old and old[0]!=feed_id:
                 db.execute('DELETE FROM live_bars WHERE user_id=? AND symbol=?',(uid,pair))
         elif kind == "quote":
@@ -503,4 +506,4 @@ class Ledger(SignalSessions, MarketScanner):
                 "goal":{"start":amount(start), "target":amount(target), "earned":amount(goal_pnl), "current":amount(start+goal_pnl), "progress":max(0,min(1,goal_pnl/(target-start))), "source":"observed_real_settlements", "available":real_account is not None},
                 "statistics":{"signals":sum(outcomes.values()),"wins":wins,"losses":losses,"draws":outcomes.get("draw",0),"win_rate":wins/(wins+losses) if wins+losses else None},
                 "connection":{"authenticated":paired,"live":live,"model_ready":False,"reason":"Котировки поступают. Анализ по проверяемым правилам структуры." if live else "Подключи модуль браузера для котировок, баланса и сделок."},
-                "signal_sessions":sessions, "signal_version":1, "market_data_version":5, "ai":self.ai.status(uid), "feed":feed, "recent_requests":recent, "catalog":{"verified_count":count}, "minimum_expiry":5, "bot_username":"Tr1edBot_bot", "server_time":now}
+                "signal_sessions":sessions, "signal_version":1, "market_data_version":6, "ai":self.ai.status(uid), "feed":feed, "recent_requests":recent, "catalog":{"verified_count":count}, "minimum_expiry":5, "bot_username":"Tr1edBot_bot", "server_time":now}

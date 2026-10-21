@@ -3,7 +3,7 @@ const $=s=>document.querySelector(s);
 let editing=false,hydrated=false,pairing=false,changingClock=false,marketClock="utc",accountTarget=null,confirmingCurrency=false;
 let identityTarget=null,identityFormKey=null,confirmingIdentity=false;
 let activeTabId=null;
-const UI_VERSION="0.3.15";
+const UI_VERSION="0.4.0";
 const labels={account:"баланс",asset:"каталог пар",quote:"котировки",candle:"свечи",trade:"сделки",feed:"состояние канала",history_status:"диагностика истории"};
 function outdated(){
   $("#connection").textContent="Окно обновилось, а фоновый модуль ещё работает в другой версии. Нажми «Перезапустить модуль», затем открой TRED снова.";
@@ -33,6 +33,8 @@ async function status(){
   const scanLabels={no_tab:"Открой Pocket Option на вкладке с графиком.",no_socket:"Рыночный канал пока не найден. Обнови вкладку Pocket Option один раз.",waiting_catalog:"Ждём каталог открытого рыночного канала.",request_failed:"Не удалось получить задание сбора. Сверь адрес в расширении с текущим окном сервера TRED.",unsupported_module:"Обнови модуль и вкладку Pocket Option."};
   $("#market-delivery").hidden=!paired;
   $("#market-delivery").textContent=!paired?"":!scanner?"Ожидаем статус сборщика рынка…":Date.now()-scanner.updated_at>20000?"Сборщик давно не отвечал. Проверь, что Pocket Option открыт и адрес сервера актуален.":scanner.code==="ready"?`Сборщик активен: заданий для пар ${scanner.pairs}. Это не число готовых графиков.`:scanLabels[scanner.code]||"Ожидаем данные рынка.";
+  if(paired&&scanner?.dedicated)$("#market-delivery").textContent+=" Открыта служебная вкладка для получения нативной истории. Её можно закрыть, чтобы остановить этот сбор.";
+  if(paired&&scanner?.paused)$("#market-delivery").textContent="Служебная вкладка закрыта. Новый запрос сигнала возобновит сбор в новой служебной вкладке.";
   $("#balance-delivery").textContent=s.paired&&s.lastBalance?"Последний баланс принят: "+new Date(s.lastBalance.received_at).toLocaleTimeString()+" · "+(s.lastBalance.mode==="demo"?"демосчёт":"реальный счёт"):"";
   $("#terminal-reader-status").textContent=!paired?"":s.terminalCode==="ready"?"Видимый баланс терминала распознан.":s.terminalCode?"Блок баланса пока не распознан. Передача поддерживаемых событий Pocket продолжается.":"Подключаем чтение открытого терминала…";
   $("#diagnostic").hidden=!s.paired||!s.diagnostic;
