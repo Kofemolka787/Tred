@@ -63,6 +63,41 @@ class AIMarketTests(unittest.TestCase):
         self.assertEqual(sum(p['data_ready'] for p in reviewed['pairs']),1)
         self.assertEqual(self.ai.calls,1)
 
+    def test_empty_early_shortlist_waits_for_later_graphs_before_paid_review(self):
+        self.ingest(self.quote(price=100),{**self.asset,'symbol':'LATER_otc'},{**self.asset,'symbol':'SILENT_otc'})
+        for period in (60,300):
+            self.ingest(*[{'type':'candle','symbol':'PAIR_otc','period':period,
+                          **{**r,'open':100,'close':100,'high':100.2,'low':99.8}} for r in fixture(period)])
+        job=self.ledger.start_scan(101)
+        self.assertEqual(job['status'],'loading')
+        self.now+=12;self.ingest(self.quote(price=100))
+        waiting=self.ledger.poll_scan(101,{'scan_id':job['scan_id']})
+        self.assertEqual(waiting['phase'],'setups')
+        self.assertEqual(waiting['progress']['analysis_ready'],1)
+        self.assertEqual(self.ai.calls,0,'Do not freeze an empty early shortlist into a paid refusal')
+        for period in (60,300):
+            self.ingest(*[{'type':'candle','symbol':'LATER_otc','period':period,**r} for r in fixture(period)])
+        self.ingest(self.quote(symbol='LATER_otc'))
+        result=self.ledger.poll_scan(101,{'scan_id':job['scan_id']})
+        self.assertEqual(result['status'],'candidate',result)
+        self.assertEqual(result['symbol'],'LATER_otc')
+        self.assertEqual(result['ai']['analyzed_charts'],2)
+        self.assertEqual(self.ai.calls,1)
+
+    def test_no_setup_collection_still_stops_at_deadline_once(self):
+        self.ingest(self.quote(price=100),{**self.asset,'symbol':'SILENT_otc'})
+        for period in (60,300):
+            self.ingest(*[{'type':'candle','symbol':'PAIR_otc','period':period,
+                          **{**r,'open':100,'close':100,'high':100.2,'low':99.8}} for r in fixture(period)])
+        job=self.ledger.start_scan(101);self.now=job['deadline']+.1
+        self.ingest(self.quote(price=100))
+        result=self.ledger.poll_scan(101,{'scan_id':job['scan_id']})
+        self.assertEqual(result['status'],'skipped',result)
+        self.assertEqual(self.ai.calls,1)
+        self.assertNotIn('direction',result)
+        self.assertEqual(self.ledger.poll_scan(101,{'scan_id':job['scan_id']}),result)
+        self.assertEqual(self.ai.calls,1)
+
     def test_selected_ai_scenario_pins_its_price_until_entry_check_or_cancel(self):
         self.history()
         class DelayedAI(FixtureAI):

@@ -145,15 +145,22 @@ class MarketScanner:
                 return {"status": "cancelled", "scan_id": job["id"], "reason": "Проверка остановлена."}
             progress = self._scan_progress(db, uid, prefs, assets, histories, now)
             risk = self._risk(db, uid)
-            # A silent pair must not hold every other complete chart until the
-            # cold-catalog deadline. Include the whole inventory in the model
-            # input, but start after a short collection window if any charts
-            # are usable. Missing graphs remain explicitly data_ready=false.
-            partial_ready=progress['analysis_ready']>0 and now-job['started_at']>=12
+            # An actual setup can start partial review after 12s. Merely having
+            # one closed graph must not spend a model call on an empty shortlist
+            # and freeze a rejection while the other charts are still arriving.
+            preview=None
+            complete=bool(progress['total'] and progress['analysis_ready']>=progress['total'])
+            future=self.ai.get(job['id'])
+            if not risk['locked'] and future is None and progress['analysis_ready'] and (complete or now-job['started_at']>=12 or now>=job['deadline']):
+                from ai_market import snapshot
+                preview,_=snapshot(assets,histories,prefs,now)
+                progress['qualified_setups']=len(preview['qualified'])
+            partial_ready=bool(preview and preview['qualified'] and now-job['started_at']>=12)
             if not risk["locked"] and not self.ai.get(job["id"]) and now < job["deadline"] and not partial_ready and (not progress["total"] or progress["analysis_ready"] < progress["total"]):
                 missing_quotes = progress["history_ready"] > 0 and not progress["quoted"]
-                return {"status": "loading", "phase": "quotes" if missing_quotes else "history", "scan_id": job["id"], "deadline": job["deadline"], "progress": progress,
-                        "reason": "История уже поступает, но свежих цен пока нет. Расширение повторяет подписки и запрашивает последние тики. Оставь Pocket Option и сервер открытыми." if missing_quotes else "Расширение автоматически запрашивает историю и котировки доступных пар. Для анализа нужны 80 закрытых свечей на двух таймфреймах. Оставь Pocket Option и сервер открытыми."}
+                searching=preview is not None and not preview['qualified']
+                return {"status": "loading", "phase": "setups" if searching else "quotes" if missing_quotes else "history", "scan_id": job["id"], "deadline": job["deadline"], "progress": progress,
+                        "reason": f"Готовы графики {progress['analysis_ready']} из {progress['total']}. На них пока нет сценария выбранного режима; продолжаем проверять поступающие графики остальных пар. Повторно нажимать кнопку не нужно." if searching else "История уже поступает, но свежих цен пока нет. Расширение повторяет подписки и запрашивает последние тики. Оставь Pocket Option и сервер открытыми." if missing_quotes else "Расширение автоматически запрашивает историю и котировки доступных пар. Для анализа нужны 80 закрытых свечей на двух таймфреймах. Оставь Pocket Option и сервер открытыми."}
             if risk["locked"]:
                 result = {"status": "skipped", "reason": risk["reason"]}
             elif progress["analysis_ready"] or self.ai.get(job["id"]):
@@ -165,7 +172,7 @@ class MarketScanner:
                             raise AIError("Сервер перезапущен во время ответа ИИ. Запроси новый анализ.")
                         if not self.ai.status(uid)["configured"]:
                             raise AIError("API-доступ изменился. Проверь SETUP-AI.cmd на компьютере.")
-                        value, _ = snapshot(assets, histories, prefs, now)
+                        value = preview if preview is not None else snapshot(assets, histories, prefs, now)[0]
                         future = self.ai.submit(job["id"], value)
                         # Closed-graph research does not need fresh ticks for
                         # every candidate simultaneously. Reserve focused tick
@@ -173,11 +180,12 @@ class MarketScanner:
                         db.execute("UPDATE scan_jobs SET status='ai',watch_symbols='[]' WHERE id=?", (job["id"],))
                     if not future.done():
                         return {"status": "loading", "phase": "ai", "scan_id": job["id"], "deadline": job["deadline"], "progress": progress,
-                                "reason": f"{self.ai.status(uid)['provider']} сравнивает Smart Money, откаты, ретесты, отскоки и ложные пробои с учётом режима рынка. Решение появится здесь автоматически; повторно нажимать кнопку не нужно."}
+                                "reason": f"{self.ai.status(uid)['provider']} сравнивает сценарии выбранного режима по полученным графикам. Решение появится здесь автоматически; повторно нажимать кнопку не нужно."}
                     reviewed = future.result()
                     decision, original = reviewed["decision"], reviewed["snapshot"]
                     info = {k: decision[k] for k in ("provider", "model", "elapsed_ms", "reviewed_pairs", "batches")}
                     info.update(summary=decision["summary"], risk=decision["risk"], evidence=decision["evidence"], as_of=original["as_of"],
+                                signal_mode=original.get('signal_mode','strict'),
                                 ready_pairs=sum(p.get("data_ready", False) for p in original["pairs"]),
                                 analyzed_charts=sum(p.get('analysis_ready',p.get('data_ready',False)) for p in original['pairs']),
                                 qualified_setups=len(original["qualified"]))

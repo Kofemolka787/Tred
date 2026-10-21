@@ -57,7 +57,7 @@ function render() {
   $("#auto-card").classList.toggle("selected", automatic);
   $("#auto-card").setAttribute("aria-pressed", String(automatic));
   text("#pair-label", automatic ? "или выбрать пару самому" : `${prefs.symbol} · сменить пару`);
-  text("#signal-subtitle", `${automatic ? "ИИ · все доступные пары" : prefs.symbol} · ${prefs.expiry} мин`);
+  text("#signal-subtitle", `${automatic ? "ИИ · все доступные пары" : prefs.symbol} · ${prefs.expiry} мин${prefs.signal_mode==="active"?" · Чаще":""}`);
   $("#data-chip").replaceChildren(document.createElement("i"), document.createTextNode(automatic ? "Автоподбор" : "Ручной выбор"));
   text("#connection-reason", connection.reason);
   const expirySwitch = $("#expiry-switch");
@@ -202,7 +202,7 @@ $("#open-pocket").addEventListener("click", () => {
 $("#request-signal").addEventListener("click", async () => {
   if (!authorized || busy) return;
   if (current.mode === "device") { $("#connect-dialog").showModal(); return; }
-  if(current.market_data_version!==6){notify("Обнови сервер до 0.4.1 — инструкция в кабинете.");return;}
+  if(current.market_data_version!==7){notify("Обнови сервер до 0.4.2 — инструкция в кабинете.");return;}
   const ticket={cancelled:false,client:dataClient,generation:connectGeneration,id:null};activeScan=ticket;
   setBusy(true);
   try {
@@ -213,7 +213,7 @@ $("#request-signal").addEventListener("click", async () => {
       current=result.state;render();window.TredSignals.show(result);
       if(first){$("#signal-result").scrollIntoView({block:"start",behavior:"smooth"});first=false;}
       if(result.status!=="loading")break;
-      text("#request-signal strong",result.phase==="ai"?"ИИ АНАЛИЗИРУЕТ…":result.phase==="entry_quote"?"ПРОВЕРЯЕМ ВХОД…":"ЗАГРУЖАЕМ РЫНОК…");
+      text("#request-signal strong",result.phase==="ai"?"ИИ АНАЛИЗИРУЕТ…":result.phase==="entry_quote"?"ПРОВЕРЯЕМ ВХОД…":result.phase==="setups"?"ИЩЕМ СЦЕНАРИИ…":"ЗАГРУЖАЕМ РЫНОК…");
       await new Promise(resolve=>setTimeout(resolve,2000));
       if(ticket.cancelled||ticket.client!==dataClient||ticket.generation!==connectGeneration)break;
       result=await api("/api/scan/poll",{scan_id:ticket.id});

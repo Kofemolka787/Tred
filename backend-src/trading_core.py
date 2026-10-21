@@ -107,11 +107,11 @@ class Ledger(SignalSessions, MarketScanner):
 
     @staticmethod
     def setup(db, uid):
-        settings = {"market": "normal", "selection": "auto", "symbol": None, "expiry": 5, "allow_otc": False, "min_payout": 85}
+        settings = {"market": "normal", "selection": "auto", "symbol": None, "expiry": 5, "allow_otc": False, "min_payout": 85,"signal_mode":"strict"}
         risk = {"daily_loss": "10.00", "daily_target": "20.00", "balance_floor": "90.00", "stake": "1.00", "max_open": 1, "max_overlays": 0, "goal_start": "100.00", "goal_target": "1000.00"}
         db.execute("INSERT OR IGNORE INTO profiles VALUES (?,?)", (uid, json.dumps(settings)))
         saved = json.loads(db.execute("SELECT settings FROM profiles WHERE user_id=?", (uid,)).fetchone()[0])
-        migrated = {**saved, "min_payout": saved.get("min_payout", 85)}
+        migrated = {**saved, "min_payout": saved.get("min_payout", 85),"signal_mode":saved.get("signal_mode","strict")}
         if migrated.get("expiry") not in (5,10,15):
             migrated["expiry"] = 15 if type(saved.get("expiry")) is int and saved["expiry"] >= 15 else 5
         if migrated != saved:
@@ -160,6 +160,8 @@ class Ledger(SignalSessions, MarketScanner):
                 raise DomainError("Проверь рынок и экспирацию.")
             if type(prefs["min_payout"]) is not int or not 85 <= prefs["min_payout"] <= 92:
                 raise DomainError("Минимальная выплата — от 85 до 92%. Это выплата брокера, не вероятность выигрыша.")
+            if prefs["signal_mode"] not in ("strict","active"):
+                raise DomainError("Выбери режим анализа: «Строже» или «Чаще».")
             if prefs["selection"] == "auto":
                 prefs["symbol"] = None
             else:
@@ -275,10 +277,10 @@ class Ledger(SignalSessions, MarketScanner):
     def _candidate(self, db, uid):
         started=time.perf_counter()
         prefs, assets, histories = self._market(db, uid)
-        candidates, rejected = rank(assets, histories, expiry=prefs["expiry"], market=prefs["market"], symbol=prefs["symbol"], allow_otc=prefs["allow_otc"], min_payout=prefs["min_payout"]/100, now=self.clock())
+        candidates, rejected = rank(assets, histories, expiry=prefs["expiry"], market=prefs["market"], symbol=prefs["symbol"], allow_otc=prefs["allow_otc"], min_payout=prefs["min_payout"]/100, now=self.clock(),signal_mode=prefs.get("signal_mode","strict"))
         elapsed=round((time.perf_counter()-started)*1000,1)
         if not candidates:
-            details=coverage(assets,histories,market=prefs["market"],expiry=prefs["expiry"],min_payout=prefs["min_payout"]/100,now=self.clock())
+            details=coverage(assets,histories,market=prefs["market"],expiry=prefs["expiry"],min_payout=prefs["min_payout"]/100,now=self.clock(),signal_mode=prefs.get("signal_mode","strict"))
             waiting=details["ready"]==0
             reason=rejected[0] if rejected else "Нет доступных пар со свежей ценой и историей. Открой нужные графики в Pocket Option."
             if details["blocked"]["history"] and waiting:
@@ -497,7 +499,7 @@ class Ledger(SignalSessions, MarketScanner):
             count = sum(catalog_current(dict(a),now) for a in db.execute("SELECT * FROM assets WHERE user_id=? AND is_open=1",(uid,)))
             sessions = self._sessions(db, uid, now)
             market_prefs, market_assets, market_histories = self._market(db, uid)
-            feed = coverage(market_assets, market_histories, market=prefs["market"], expiry=prefs["expiry"], min_payout=market_prefs["min_payout"]/100, now=now)
+            feed = coverage(market_assets, market_histories, market=prefs["market"], expiry=prefs["expiry"], min_payout=market_prefs["min_payout"]/100, now=now,signal_mode=prefs.get("signal_mode","strict"))
             # Goal follows settled trades observed by this connector, never deposits.
             real_account = next((a for a in accounts if a["mode"]=="real"),None)
             goal_pnl = db.execute("SELECT COALESCE(sum(pnl),0) FROM manual_trades WHERE user_id=? AND mode='real' AND account_id=? AND status!='open'", (uid,real_account["id"] if real_account else "")).fetchone()[0]
@@ -506,4 +508,4 @@ class Ledger(SignalSessions, MarketScanner):
                 "goal":{"start":amount(start), "target":amount(target), "earned":amount(goal_pnl), "current":amount(start+goal_pnl), "progress":max(0,min(1,goal_pnl/(target-start))), "source":"observed_real_settlements", "available":real_account is not None},
                 "statistics":{"signals":sum(outcomes.values()),"wins":wins,"losses":losses,"draws":outcomes.get("draw",0),"win_rate":wins/(wins+losses) if wins+losses else None},
                 "connection":{"authenticated":paired,"live":live,"model_ready":False,"reason":"Котировки поступают. Анализ по проверяемым правилам структуры." if live else "Подключи модуль браузера для котировок, баланса и сделок."},
-                "signal_sessions":sessions, "signal_version":1, "market_data_version":6, "ai":self.ai.status(uid), "feed":feed, "recent_requests":recent, "catalog":{"verified_count":count}, "minimum_expiry":5, "bot_username":"Tr1edBot_bot", "server_time":now}
+                "signal_sessions":sessions, "signal_version":1, "market_data_version":7, "ai":self.ai.status(uid), "feed":feed, "recent_requests":recent, "catalog":{"verified_count":count}, "minimum_expiry":5, "bot_username":"Tr1edBot_bot", "server_time":now}

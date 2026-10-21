@@ -19,10 +19,16 @@ from ai_provider import ModelReplyError, load_config, response_body, response_te
 from ai_decision import DecisionError, FORMAT, WIRE_SCHEMA, prepare_payload, decode_decision
 from ai_response import ResponseError, read_response
 from market_feed import catalog_current, catalog_observed
-from market_strategies import frame, detect, STRATEGIES
+from market_strategies import frame, detect, strategy_catalog
 
-SYSTEM = """Ты — аналитик TRED. Сравни сценарии по пяти семействам: Smart Money,
+SYSTEM = """Ты — аналитик TRED. Сравни сценарии из переданного каталога strategies: Smart Money,
 откат EMA 20/50, пробой с ретестом, отскок в диапазоне, ложный пробой.
+В signal_mode=active пользователь выбрал «Чаще»: дополнительно доступны продолжение тренда,
+импульсный пробой до ретеста и поглощение у уровня/EMA. Их риск повышен.
+Не требуй OB, FVG, sweep или ретест у стратегий, в правилах которых их нет.
+Переходный старший период сам по себе не запрещает active-сценарий: проверь отсутствие
+сильного противоположного тренда и объясни риск. RSI/Stochastic в тренде могут оставаться
+в крайних значениях; это не самостоятельный запрет. Не считай индикаторы вероятностью выигрыша.
 Выбирай стратегию под режим рынка. Боковому отскоку не требуется трендовая HH/HL,
 но ему нужны границы диапазона, подтверждённая реакция и подходящий старший режим.
 RSI, MACD, Stochastic, Bollinger Bands и поглощение — дополнительные подтверждения,
@@ -263,7 +269,8 @@ def validate(decision, snapshot):
 
 
 def snapshot(assets, histories, prefs, now):
-    candidates, _ = rank(assets, histories, expiry=prefs["expiry"], market=prefs["market"], symbol=prefs["symbol"], allow_otc=prefs["allow_otc"], now=now, min_payout=prefs["min_payout"] / 100,research=True)
+    mode=prefs.get("signal_mode","strict")
+    candidates, _ = rank(assets, histories, expiry=prefs["expiry"], market=prefs["market"], symbol=prefs["symbol"], allow_otc=prefs["allow_otc"], now=now, min_payout=prefs["min_payout"] / 100,research=True,signal_mode=mode)
     pairs = []
     for asset in pool(assets, prefs):
         periods, bars, checks = frame_data(histories, asset["symbol"], prefs["expiry"], now)
@@ -282,7 +289,7 @@ def snapshot(assets, histories, prefs, now):
             for target, period, rows in zip(frames, periods, bars):
                 features = frame(rows, period, now)
                 if features:
-                    patterns = detect(features)
+                    patterns = detect(features,mode)
                     target.update(timeframe=f"M{period//60}", bar_time=features["bar_time"],
                                   regime=features["regime"], trend=features["trend"],
                                   indicators=features["indicators"], levels=features["levels"],
@@ -292,7 +299,7 @@ def snapshot(assets, histories, prefs, now):
                     target["events"] = target.get("events", []) + [e for s in patterns for e in s["events"]]
         pairs.append({"symbol": asset["symbol"], "market": asset["market"], "payout": asset["payout"], "price": asset.get("price"), "quote_time": asset.get("quote_time"), 'data_ready':ready,'analysis_ready':analysis_ready, "frames": frames})
     value = {"as_of": now, "expiry_minutes": prefs["expiry"], "period_unit": "seconds", "minimum_payout": prefs["min_payout"], "pairs": pairs,
-             "strategies": list(STRATEGIES),
-             "qualified": [{k: c[k] for k in ("symbol", "direction", "strategy", "setup_id", "strategy_name", "strategy_risk", "timeframes", "bar_time", "context_bar_time", "entry_low", "entry_high", "invalidation", "payout","entry_ready","reference_price","reference_source")} for c in candidates]}
+             "signal_mode":mode,"strategies": list(strategy_catalog(mode)),
+             "qualified": [{k: c[k] for k in ("symbol", "direction", "strategy", "setup_id", "strategy_name", "strategy_risk", "signal_mode", "risk_level", "timeframes", "bar_time", "context_bar_time", "entry_low", "entry_high", "invalidation", "payout","entry_ready","reference_price","reference_source")} for c in candidates]}
     # Private account/Telegram identifiers, money and credentials are absent.
     return value, candidates

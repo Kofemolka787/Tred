@@ -14,7 +14,8 @@ from playwright.sync_api import expect, sync_playwright
 from ai_market import OpenAIAnalyzer, SCHEMA
 from backend import handler
 from configure_ai import save
-from market_strategies import BY_ID
+from market_strategies import BY_ID, ACTIVE_STRATEGIES
+from test_active_signals import active_market
 from test_market_strategies import NOW, market
 from test_support import FixtureAI, signed_data
 from trading_core import Ledger
@@ -25,7 +26,8 @@ reports = []
 with sync_playwright() as playwright:
     browser = playwright.chromium.launch(executable_path="/usr/bin/chromium", args=["--no-sandbox", "--disable-dev-shm-usage"])
     try:
-        for family in ("ema_pullback", "range_rebound", "breakout_retest", "false_breakout"):
+        for family in ("ema_pullback", "range_rebound", "breakout_retest", "false_breakout", *(s["id"] for s in ACTIVE_STRATEGIES)):
+            active=family in {s["id"] for s in ACTIVE_STRATEGIES}
             with tempfile.TemporaryDirectory(prefix="tred-strategy-ui-") as temporary:
                 current, requests, errors = [float(NOW)], [], []
                 secret = "lr_fixture_strategy_ui_not_real"
@@ -50,7 +52,7 @@ with sync_playwright() as playwright:
                 ledger=Ledger(Path(temporary)/"ledger.sqlite3",clock=lambda:current[0],ai=engine)
                 token=ledger.claim(ledger.pair(101)["code"])["token"]
                 ledger.settings(101,{"market":"otc","allow_otc":True})
-                asset,histories,_=market(family)
+                asset,histories,_=(active_market if active else market)(family)
                 events=[{"type":"asset","symbol":"PAIR_otc","market":"otc","is_open":True,"payout":.92,"expiries":[5,10,15],"time":NOW},
                         {"type":"quote","symbol":"PAIR_otc","price":asset["price"],"time":NOW},
                         {"type":"account","account_id":"456","mode":"demo","currency":"USD","balance":"105.20","time":NOW}]
@@ -70,13 +72,18 @@ with sync_playwright() as playwright:
                     context.route("https://telegram.org/js/telegram-web-app.js",lambda route:route.fulfill(content_type="application/javascript",body=script))
                     page=context.new_page();page.on("pageerror",lambda error:errors.append(str(error)));page.goto(f"http://127.0.0.1:{server.server_port}")
                     expect(page.locator("#feed-coverage")).to_contain_text("готовы к анализу: 1")
+                    if active:
+                        page.locator('#signal-mode').select_option('active')
+                        expect(page.locator('#signal-mode-help')).to_contain_text('Риск выше')
+                        assert ledger.state({'id':101})['preferences']['signal_mode']=='active'
                     expect(page.locator("#strategy-help")).to_be_visible()
                     page.locator("#strategy-help summary").click()
-                    assert page.locator("#strategy-list > p").count()==5
+                    assert page.locator("#strategy-list > p").count()==(8 if active else 5)
                     page.locator("#strategy-help summary").click()
                     page.locator("#request-signal").click()
                     expect(page.locator("#signal-result h2")).to_contain_text("PAIR_otc",timeout=15000)
                     expect(page.locator("#signal-result")).to_contain_text(BY_ID[family]["name"])
+                    if active:expect(page.locator('#signal-result')).to_contain_text('Чаще · повышенный риск')
                     page.locator("#signal-result summary").click()
                     expect(page.locator("#signal-result details")).to_contain_text("Слабость стратегии:")
                     expect(page.locator("#signal-result details")).to_contain_text("M1 + M5")
@@ -90,12 +97,13 @@ with sync_playwright() as playwright:
                     state=ledger.state({"id":101})
                     assert state["signal_sessions"][0]["result"]=="win"
                     assert state["signal_sessions"][0]["setup"]["strategy"]==family
+                    assert state['signal_sessions'][0]['setup']['signal_mode']==('active' if active else 'strict')
                     assert state["accounts"][0]["balance"]=="105.20" and not state["trades"]
                     assert ledger.state({"id":202})["signal_sessions"]==[]
                     assert len(requests)==1 and not errors, errors
                     assert secret not in page.content()
                     assert page.evaluate("document.documentElement.scrollWidth<=innerWidth")
-                    reports.append({"strategy":family,"ai_choice_visible":True,"explanation_and_weakness_visible":True,"strategy_persisted_with_user_result":True,"balance_unchanged":True})
+                    reports.append({"strategy":family,"signal_mode":"active" if active else "strict","ai_choice_visible":True,"explanation_and_weakness_visible":True,"strategy_persisted_with_user_result":True,"risk_label_visible":active,"balance_unchanged":True})
                 finally:
                     context.close();server.shutdown();server.server_close();model.shutdown();model.server_close();engine.executor.shutdown()
     finally:browser.close()

@@ -84,7 +84,7 @@ with tempfile.TemporaryDirectory(prefix="tred-terminal-ui-") as temporary:
                 status=forward({"action":"status"})
                 assert status["lastBalance"]["origin"]=="terminal-dom"
 
-                terminal.evaluate("window.invalidateRelay=true;window.postMessage({source:'tred-observer-v1',observer_version:'0.4.1',events:[{type:'quote'}]},location.origin)")
+                terminal.evaluate("window.invalidateRelay=true;window.postMessage({source:'tred-observer-v1',observer_version:'0.4.2',events:[{type:'quote'}]},location.origin)")
                 terminal.wait_for_function("!__tredRelay.active")
                 terminal.evaluate("window.invalidateRelay=false")
                 terminal.evaluate((ROOT/"connector/relay.js").read_text())

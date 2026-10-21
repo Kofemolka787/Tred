@@ -42,6 +42,7 @@ window.TredSignals=(()=>{
   }
   function why(setup){
     const detail=node("details","signal-why");detail.append(node("summary","","Почему этот сценарий"));
+    if(setup.signal_mode==="active")detail.append(node("p","notice","Режим «Чаще»: ранние входы с повышенным риском. Частота не означает более высокую проходимость."));
     if(setup.strategy_name)detail.append(node("p","",`Стратегия: ${setup.strategy_name}. Таймфреймы: ${(setup.timeframes||[]).map(p=>"M"+p/60).join(" + ")}.`));
     if(setup.strategy_risk)detail.append(node("p","","Слабость стратегии: "+setup.strategy_risk));
     if(setup.ai)detail.append(node("p","",`${setup.ai.provider} · ${setup.ai.model}: ${setup.ai.summary}`),node("p","","Что учитывать: "+setup.ai.risk));
@@ -67,7 +68,7 @@ window.TredSignals=(()=>{
     const host=$("#signal-result");host.replaceChildren();host.hidden=false;
     if(!chosen){
       const invalidReply=/^(decision_|model_)/.test(result.ai_error_code||"");
-      const title=result.status==="loading"?(result.phase==="ai"?"ИИ анализирует рынок":result.phase==="entry_quote"?"Проверяем цену входа":result.phase==="quotes"?"Получаем текущие цены":"Загружаем данные всех пар"):result.status==="setup_required"?"Подключи ИИ один раз":result.status==="ai_unavailable"?(invalidReply?"Ответ ИИ не прошёл проверку":"ИИ пока недоступен"):result.status==="cancelled"?"Проверка остановлена":result.waiting_data?"Не хватает данных для анализа":"ИИ не подтвердил вход";
+      const title=result.status==="loading"?(result.phase==="ai"?"ИИ анализирует рынок":result.phase==="entry_quote"?"Проверяем цену входа":result.phase==="setups"?"Ищем сценарии на остальных парах":result.phase==="quotes"?"Получаем текущие цены":"Загружаем данные всех пар"):result.status==="setup_required"?"Подключи ИИ один раз":result.status==="ai_unavailable"?(invalidReply?"Ответ ИИ не прошёл проверку":"ИИ пока недоступен"):result.status==="cancelled"?"Проверка остановлена":result.waiting_data?"Не хватает данных для анализа":"ИИ не подтвердил вход";
       host.append(node("h3","",title),node("p","",result.reason||"Ждём подтверждённые условия."));
       if(result.status==="ai_unavailable"&&/^[a-z_]{3,48}$/.test(result.ai_error_code||""))host.append(node("p","quiet-text","Код проверки: "+result.ai_error_code));
       if(result.progress)host.append(node("p","",`Графики для ИИ: ${result.progress.analysis_ready??result.progress.history_ready} / ${result.progress.total} · свежие котировки: ${result.progress.quoted}`));
@@ -76,6 +77,7 @@ window.TredSignals=(()=>{
       return;
     }
     host.append(node("p","eyebrow",`${result.market==="otc"?"OTC":"ОБЫЧНЫЙ РЫНОК"} · ${result.ai?"ИИ-СЦЕНАРИЙ":"СЦЕНАРИЙ ПО СТРУКТУРЕ"}`),node("h2","",`${result.symbol} ${result.direction==="up"?"↑ ВВЕРХ":"↓ ВНИЗ"}`),node("p","",`${result.expiry} мин · выплата ${Math.round(result.payout*100)}% · анализ M${result.timeframes[0]/60} + M${result.timeframes[1]/60}`));
+    if(result.signal_mode==="active")host.append(node("p","notice","Чаще · повышенный риск. Возможен ранний вход без отдельного ретеста."));
     if(result.strategy_name)host.append(node("p","entry-window",result.strategy_name));
     if(result.ai)host.append(node("p","",`${result.ai.provider} · ${result.ai.model} · рассмотрено пар: ${result.ai.reviewed_pairs} · графиков в анализе: ${result.ai.analyzed_charts??result.ai.ready_pairs} / ${result.total_pairs}`));
     const preview=node("p","entry-window");preview.id="close-preview";host.append(preview);
@@ -99,7 +101,7 @@ window.TredSignals=(()=>{
   function render(state){
     if(Number.isFinite(state.server_time))offset=state.server_time-Date.now()/1000;
     const prefs=state.preferences;
-    if(chosen&&(chosen.expiry!==prefs.expiry||chosen.market!==prefs.market||chosen.payout<(prefs.min_payout||85)/100||!(state.recent_requests||[]).some(r=>r.analysis_id===chosen.analysis_id&&r.valid_until===chosen.valid_until))){chosen=null;$("#signal-result").hidden=true;}
+    if(chosen&&((chosen.signal_mode||"strict")!==(prefs.signal_mode||"strict")||chosen.expiry!==prefs.expiry||chosen.market!==prefs.market||chosen.payout<(prefs.min_payout||85)/100||!(state.recent_requests||[]).some(r=>r.analysis_id===chosen.analysis_id&&r.valid_until===chosen.valid_until))){chosen=null;$("#signal-result").hidden=true;}
     const feed=state.feed;
     const metadata=feed?.metadata_eligible??feed?.pairs?.filter(p=>!["closed","payout","expiry"].includes(p.stage)).length??feed?.eligible;
     $("#feed-coverage").textContent=feed?`Каталог: ${feed.catalog} · выплата и время подходят: ${metadata} · свежая цена: ${feed.quoted} · готовы к анализу: ${feed.analysis_ready??feed.ready}`:"Для анализа нужен обновлённый сервер TRED.";
@@ -115,12 +117,14 @@ window.TredSignals=(()=>{
     const suggestions=$(".pair-suggestions");
     if(feed?.pairs?.length){suggestions.replaceChildren();for(const p of feed.pairs){const b=node("button","",`${p.symbol} · ${Math.round(p.payout*100)}%`);b.type="button";b.dataset.symbol=p.symbol;suggestions.append(b);}}
     $("#min-payout").value=state.preferences.min_payout||85;
+    $("#signal-mode").value=state.preferences.signal_mode||"strict";
+    $("#signal-mode-help").textContent=state.preferences.signal_mode==="active"?"Чаще: восемь семейств, включая продолжение тренда, импульсный пробой и поглощение. Переходный старший период допустим без сильного встречного тренда. Риск выше.":"Строже: пять семейств стратегий с подтверждённой реакцией. Режим можно переключить на «Чаще».";
     const strategies=$("#strategy-list"),strategyHelp=$("#strategy-help");
     if(strategies&&strategyHelp){
       strategyHelp.hidden=!feed?.strategy_catalog?.length;strategies.replaceChildren();
       for(const s of feed?.strategy_catalog||[]){const row=node("p");row.append(node("strong","",s.name),node("span",""," — "+s.rule),node("small","","Слабость: "+s.weakness));strategies.append(row);}
     }
-    $("#signals-upgrade").hidden=state.mode!=="api"||state.market_data_version===6&&!!feed?.strategy_catalog?.length;
+    $("#signals-upgrade").hidden=state.mode!=="api"||state.market_data_version===7&&!!feed?.strategy_catalog?.length;
     $("#ai-status").textContent=state.mode!=="api"?"ИИ подключается к твоему серверу TRED.":state.ai?.configured?`ИИ: ${state.ai.provider} · ${state.ai.model}. Ключ настроен; решение проверяется по свежим данным.`:"ИИ ещё не настроен. Запусти SETUP-LUNAROUTE.cmd на компьютере и введи ключ LunaRoute локально.";
     const help=$("#feed-help");
     if(feed?.blocked){
@@ -166,6 +170,7 @@ window.TredSignals=(()=>{
     });
     document.addEventListener("click",async event=>{const b=event.target.closest("[data-result]");if(b&&!working)await action("/api/result",{session_id:Number(b.dataset.session),result:b.dataset.result});});
     $("#min-payout").addEventListener("change",()=>hooks.update({min_payout:Number($("#min-payout").value)}));
+    $("#signal-mode").addEventListener("change",()=>hooks.update({signal_mode:$("#signal-mode").value}));
     setInterval(timer,1000);
   }
   return {init,render,show};

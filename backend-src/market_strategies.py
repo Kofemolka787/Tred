@@ -23,7 +23,22 @@ STRATEGIES = (
      "rule": "Выход за заранее известный уровень и закрытие обратно с подтверждением.",
      "weakness": "Возврат за уровень может оказаться временным."},
 )
-BY_ID = {s["id"]: s for s in STRATEGIES}
+ACTIVE_STRATEGIES = (
+    {"id": "trend_continuation", "name": "Продолжение тренда", "regime": "trend",
+     "rule": "EMA и закрытые свечи продолжают движение без чрезмерного удаления от EMA 20.",
+     "weakness": "Повышенный риск: отдельного ретеста нет, импульс может закончиться."},
+    {"id": "momentum_breakout", "name": "Импульсный пробой диапазона", "regime": "breakout",
+     "rule": "Закрытая направленная свеча пробивает экстремум десяти предыдущих свечей.",
+     "weakness": "Повышенный риск: вход до ретеста, возможен ложный пробой."},
+    {"id": "level_engulfing", "name": "Поглощение у уровня или EMA", "regime": "reversal",
+     "rule": "Закрытое поглощение с касанием заранее известного уровня или скользящей.",
+     "weakness": "Повышенный риск: одна свечная реакция может не перейти в разворот."},
+)
+BY_ID = {s["id"]: s for s in STRATEGIES + ACTIVE_STRATEGIES}
+
+
+def strategy_catalog(mode="strict"):
+    return STRATEGIES + ACTIVE_STRATEGIES if mode == "active" else STRATEGIES
 
 
 def valid_bar(row):
@@ -134,8 +149,10 @@ def engulfing(rows, up):
             previous["close"] > previous["open"] and last["close"] < last["open"] and last["open"] >= previous["close"] and last["close"] <= previous["open"])
 
 
-def context_allows(context, direction, family):
+def context_allows(context, direction, family, mode="strict"):
     if family in ("smart_money", "ema_pullback"):
+        if mode == "active" and family == "ema_pullback":
+            return context["trend"] in (None, direction)
         return context["trend"] == direction
     if family == "range_rebound":
         return context["regime"] == "range"
@@ -159,7 +176,7 @@ def setup(f, strategy, direction, evidence, invalidation, *, level=None, level_t
             "events": events or [{"kind": strategy, "time": f["bar_time"]}], "channel": None}
 
 
-def detect(f):
+def detect(f, mode="strict"):
     """Independent families: a range entry never requires a trending SMC frame."""
     rows, atr = f["rows"], f["atr"]
     last, previous = rows[-1], rows[-2]
@@ -224,6 +241,8 @@ def detect(f):
                         min(edge, level)-.2*atr if up else max(edge, level)+.2*atr,
                         level=level, level_time=item["time"], events=[{"kind": "breakout", "time": breakout["time"], "level": level},
                                              {"kind": "retest", "time": last["time"], "level": level}]))
+    if mode == "active":
+        found.extend(active_setups(f))
     # Several nearby levels can describe the same setup. Keep one per family/direction.
     unique = {}
     for item in found:
@@ -233,7 +252,51 @@ def detect(f):
     return list(unique.values())
 
 
-def evaluate(bars, periods, checks, now):
+def active_setups(f):
+    """More frequent causal triggers, without requiring a retest or SMC pivots."""
+    rows, atr, found = f["rows"], f["atr"], []
+    last, previous = rows[-1], rows[-2]
+    for direction, sign in (("up", 1), ("down", -1)):
+        up = direction == "up"
+        body = sign*(last["close"]-last["open"])
+        invalidation = min(r["low"] for r in rows[-3:])-.1*atr if up else max(r["high"] for r in rows[-3:])+.1*atr
+        resumed = body >= .15*atr and sign*(last["close"]-previous["close"]) > 0
+        moving = sum(sign*(r["close"]-r["open"]) > 0 for r in rows[-3:]) >= 2
+        distance = sign*(last["close"]-f["fast"][-1])/atr
+        if f["trend"] == direction and resumed and moving and 0 < distance <= 1.75:
+            found.append(setup(f, "trend_continuation", direction,
+                ["EMA 20/50 и их наклон подтверждают направление.",
+                 "Не менее двух из трёх закрытых свечей направлены по тренду; последняя продолжает движение.",
+                 f"Удаление закрытия от EMA 20: {distance:.2f} ATR; ретест не требуется в режиме «Чаще»."], invalidation))
+        level = max(r["high"] for r in rows[-11:-1]) if up else min(r["low"] for r in rows[-11:-1])
+        excursion = sign*(last["close"]-level)/atr
+        candle_range = last["high"]-last["low"]
+        close_position = (last["close"]-last["low"] if up else last["high"]-last["close"])/candle_range if candle_range else 0
+        if (f["trend"] in (None, direction) and .4 <= body/atr <= 1.8 and .05 <= excursion <= .8
+                and candle_range <= 2.5*atr and close_position >= .7):
+            found.append(setup(f, "momentum_breakout", direction,
+                [f"Закрытие пробило экстремум десяти предыдущих закрытых свечей: {level:.8g}.",
+                 f"Тело пробойной свечи {body/atr:.2f} ATR; закрытие у её направленной границы.",
+                 "Вход до ретеста: это более ранний сценарий с повышенным риском."],
+                min(last["low"],level)-.1*atr if up else max(last["high"],level)+.1*atr,
+                level=level, level_time=previous["time"], events=[{"kind":"momentum_breakout","time":last["time"],"level":level}]))
+        if engulfing(rows, up) and .2*atr <= body <= 1.5*atr:
+            edge = last["low"] if up else last["high"]
+            known = [x for x in f["levels"]["support" if up else "resistance"]
+                     if abs(edge-x["price"]) <= .5*atr and 0 < sign*(last["close"]-x["price"]) <= 1.5*atr]
+            touched_ema = any(last["low"] <= values[-2]+.2*atr and last["high"] >= values[-2]-.2*atr
+                              and 0 < sign*(last["close"]-values[-2]) <= atr for values in (f["fast"],f["slow"]))
+            if known or touched_ema:
+                item = min(known,key=lambda x:abs(edge-x["price"])) if known else None
+                found.append(setup(f, "level_engulfing", direction,
+                    ["Закрытая свеча поглотила тело предыдущей свечи противоположного направления.",
+                     f"Реакция у заранее подтверждённого уровня {item['price']:.8g}." if item else "Реакция у EMA, рассчитанной до сигнальной свечи.",
+                     "Свечная реакция даёт ранний вход; отдельный BOS или ретест не требуется."], invalidation,
+                    level=item["price"] if item else None, level_time=item["time"] if item else None))
+    return found
+
+
+def evaluate(bars, periods, checks, now, mode="strict"):
     primary, context = [frame(rows, period, now) for rows, period in zip(bars, periods)]
     if primary is None or context is None:
         return [], [], "Для стратегий нужны два полных свежих периода без пропусков."
@@ -242,9 +305,11 @@ def evaluate(bars, periods, checks, now):
     if first["status"] == "candidate" and higher.get("context_ready") and first["direction"] == higher["direction"]:
         spec = BY_ID["smart_money"]
         setups.append({**first, "strategy": spec["id"], "strategy_name": spec["name"], "strategy_risk": spec["weakness"]})
-    for candidate in detect(primary):
-        if context_allows(context, candidate["direction"], candidate["strategy"]):
+    for candidate in detect(primary, mode):
+        if context_allows(context, candidate["direction"], candidate["strategy"], mode):
             candidate["evidence"].append(f"Старший M{periods[1]//60}: " + ("подтверждён боковик." if candidate["strategy"] == "range_rebound" else "режим не противоречит сценарию."))
+            if mode == "active" and context["regime"] == "transition":
+                candidate["evidence"].append("Старший период переходный: согласованный тренд на нём не подтверждён, риск выше.")
             setups.append(candidate)
         else:
             rejected.append(candidate["strategy_name"]+": старший период не подтверждает режим.")

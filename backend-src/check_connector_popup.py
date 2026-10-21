@@ -24,12 +24,12 @@ try:
             page=browser.new_page(viewport={"width":340,"height":820});errors=[]
             page.on("pageerror",lambda error:errors.append(str(error)))
             page.add_init_script("""
-              window.fixture={worker_version:'0.4.1',base:'https://fixture-route.trycloudflare.com',paired:true,needsPairing:false,lastError:'',diagnostic:'Котировка · time: опережает часы браузера примерно на 7200 с. Событие не передано.',receivedKinds:['asset'],marketClock:'utc'};
+              window.fixture={worker_version:'0.4.2',base:'https://fixture-route.trycloudflare.com',paired:true,needsPairing:false,lastError:'',diagnostic:'Котировка · time: опережает часы браузера примерно на 7200 с. Событие не передано.',receivedKinds:['asset'],marketClock:'utc'};
               window.reloaded=0;
               window.fixtureTabId=1;window.idConfirmations=0;
               window.chrome={tabs:{query:async()=>[{id:window.fixtureTabId}]},runtime:{sendMessage:async message=>{
                 if(message.action==='status')return structuredClone(window.fixture);
-                if(message.action==='disconnect'){window.fixture={worker_version:'0.4.1',paired:false,lastError:'Старая ошибка'};return {ok:true};}
+                if(message.action==='disconnect'){window.fixture={worker_version:'0.4.2',paired:false,lastError:'Старая ошибка'};return {ok:true};}
                 if(message.action==='market-clock'){window.fixture.marketClock=message.profile;window.fixture.diagnostic='';return {ok:true};}
                 if(message.action==='confirm-usd'){if(message.account_id!==window.fixture.accountCandidate.account_id||message.mode!==window.fixture.accountCandidate.mode)throw Error('Wrong account');window.fixture.usdConfirmed=true;return {ok:true};}
                 if(message.action==='forget-account-id'){window.fixture.accountCandidate=null;return {ok:true};}

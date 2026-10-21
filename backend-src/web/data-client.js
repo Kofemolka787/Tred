@@ -80,7 +80,7 @@ window.TredData = (() => {
     const p = value && typeof value === "object" ? value : {};
     const sym = typeof p.symbol === "string" ? p.symbol.trim().toUpperCase().replace(/\s+/g," ") : null;
     const manual = p.selection === "manual" && /^[A-Z0-9][A-Z0-9 /_.#-]{1,31}$/.test(sym || "");
-    return {market:["normal","otc"].includes(p.market) ? p.market : "normal",expiry:expirations.includes(p.expiry) ? p.expiry : 5,selection:manual ? "manual" : "auto",symbol:manual ? sym : null,state:"idle",allow_otc:p.allow_otc === true,min_payout:Number.isInteger(p.min_payout)&&p.min_payout>=85&&p.min_payout<=92?p.min_payout:85};
+    return {market:["normal","otc"].includes(p.market) ? p.market : "normal",expiry:expirations.includes(p.expiry) ? p.expiry : 5,selection:manual ? "manual" : "auto",symbol:manual ? sym : null,state:"idle",allow_otc:p.allow_otc === true,signal_mode:p.signal_mode==="active"?"active":"strict",min_payout:Number.isInteger(p.min_payout)&&p.min_payout>=85&&p.min_payout<=92?p.min_payout:85};
   }
   function validRisk(value) {
     const result = {...defaults};
@@ -109,7 +109,7 @@ window.TredData = (() => {
       if (path === "/api/state") return state();
       if (path === "/api/settings") {
         const next = {...preferences,...changes};
-        if (!changes || typeof changes !== "object" || !Object.keys(changes).every(k => ["market","expiry","symbol","selection","allow_otc","min_payout"].includes(k)) || !["normal","otc"].includes(next.market) || !expirations.includes(next.expiry) || !["auto","manual"].includes(next.selection) || typeof next.allow_otc !== "boolean" || !Number.isInteger(next.min_payout) || next.min_payout<85 || next.min_payout>92) throw new Error("Проверь выбранные настройки.");
+        if (!changes || typeof changes !== "object" || !Object.keys(changes).every(k => ["market","expiry","symbol","selection","allow_otc","min_payout","signal_mode"].includes(k)) || !["normal","otc"].includes(next.market) || !expirations.includes(next.expiry) || !["auto","manual"].includes(next.selection) || typeof next.allow_otc !== "boolean" || !["strict","active"].includes(next.signal_mode) || !Number.isInteger(next.min_payout) || next.min_payout<85 || next.min_payout>92) throw new Error("Проверь выбранные настройки.");
         if (next.selection === "manual" && (typeof next.symbol !== "string" || !/^[A-Z0-9][A-Z0-9 /_.#-]{1,31}$/.test(next.symbol.trim().toUpperCase()))) throw new Error("Проверь название пары.");
         preferences = validPreferences(next); persist(); return state();
       }

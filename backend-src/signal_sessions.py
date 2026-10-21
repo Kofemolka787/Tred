@@ -48,7 +48,7 @@ class SignalSessions:
                 if signal.get('ai') and signal.get('setup_id'):
                     from market_analysis import rank, same_setup
                     prefs,_,histories=self._market(db,uid)
-                    current,_=rank([{**dict(asset),'expiries':json.loads(asset['expiries'])}],histories,expiry=signal['expiry'],market=signal['market'],symbol=signal['symbol'],allow_otc=signal['market']=='otc',now=now,min_payout=signal.get('min_payout',.85))
+                    current,_=rank([{**dict(asset),'expiries':json.loads(asset['expiries'])}],histories,expiry=signal['expiry'],market=signal['market'],symbol=signal['symbol'],allow_otc=signal['market']=='otc',now=now,min_payout=signal.get('min_payout',.85),signal_mode=signal.get('signal_mode','strict'))
                     current=[c for c in current if same_setup(c,signal)]
                 if not current:
                     raise DomainError("Закрылась новая свеча и прежний сценарий не подтверждён. Обнови анализ перед входом.", 409)
