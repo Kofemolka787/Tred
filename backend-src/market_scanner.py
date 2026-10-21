@@ -2,8 +2,9 @@
 import json
 import math
 
-from market_analysis import PERIODS, frame_data, same_setup
+from market_analysis import frame_data, same_setup, history
 from market_feed import catalog_current, catalog_observed
+from market_strategies import closed_tail
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS scan_bridge(user_id INTEGER PRIMARY KEY,seen_at REAL NOT NULL,code TEXT NOT NULL);
@@ -66,19 +67,23 @@ class MarketScanner:
                 frames, bars, checks = frame_data(histories, a["symbol"], prefs["expiry"], now)
                 usable = all(c.get("history_ready") for c in checks)
                 effective = dict(zip(frames, bars)) if usable else {}
-                if not usable:
-                    frames = PERIODS[prefs["expiry"]]
                 needed = []
                 for period in frames:
                     # frame_data can already supply complete M2/M10 etc. from
                     # contiguous lower-period bars. Reuse that verified history
                     # instead of repeatedly fetching a new 160-bar native copy.
-                    data = effective.get(period, histories.get((a["symbol"], period), []))
+                    data = effective[period] if period in effective else history(histories,a["symbol"],period,now)
                     closed = math.floor(now / period) * period - period
-                    tail = data[-160:]
+                    tail = closed_tail(data,period,now)
                     complete = len(tail) >= 80 and all(b["time"] - x["time"] == period for x, b in zip(tail, tail[1:]))
                     if not complete or not data or data[-1]["time"] < closed:
-                        needed.append({"period": period, "bars": 160 if not complete else 5})
+                        task={"period": period, "bars": 160 if not complete else 5}
+                        # Short native pages need an older end bound. Repeating
+                        # the same newest 24 bars can never produce 80 closed
+                        # bars. Stale data is refreshed at the current time first.
+                        if not complete and tail and now-(tail[-1]['time']+period)<=period+10:
+                            task['before']=math.floor(tail[0]['time']/period)*period
+                        needed.append(task)
                 quoted = a.get("quote_time") is not None and now-a["quote_time"] <= 8 and a.get("quote_feed") == a["catalog_feed"]
                 priority=a['symbol'] in watched
                 # Focused instruments keep a task present even between polls;

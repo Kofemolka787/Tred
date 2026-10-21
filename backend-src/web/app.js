@@ -202,7 +202,7 @@ $("#open-pocket").addEventListener("click", () => {
 $("#request-signal").addEventListener("click", async () => {
   if (!authorized || busy) return;
   if (current.mode === "device") { $("#connect-dialog").showModal(); return; }
-  if(current.market_data_version!==4){notify("Обнови сервер до 0.3.24 — инструкция в кабинете.");return;}
+  if(current.market_data_version!==5){notify("Обнови сервер до 0.3.25 — инструкция в кабинете.");return;}
   const ticket={cancelled:false,client:dataClient,generation:connectGeneration,id:null};activeScan=ticket;
   setBusy(true);
   try {

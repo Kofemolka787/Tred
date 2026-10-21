@@ -156,6 +156,29 @@ class MarketFeedTests(unittest.TestCase):
         self.assertTrue(all(c.get('history_ready') for c in checks))
         self.assertGreaterEqual(len(bars[1]),80)
 
+    def test_short_history_pages_request_older_data_instead_of_repeating_the_latest_page(self):
+        self.ledger.settings(101,{'expiry':15})
+        for period in (300,900):
+            self.ingest(*[{'type':'candle','symbol':'PAIR_otc','period':period,**r} for r in fixture(period)[-24:]])
+        plan=self.ledger.bridge_plan(self.token,{'code':'ready'})['plan']['pairs'][0]
+        for task in plan['history']:
+            self.assertEqual(task['before'],self.now-24*task['period'])
+        self.assertEqual(self.state()['feed']['analysis_ready'],0)
+        available=self.state()['feed']['pairs'][0]['available_history']
+        self.assertEqual([(h['period'],h['bars'],h['age_seconds']) for h in available],[(300,24,0),(900,24,0)])
+
+    def test_partial_alternative_frames_are_finished_and_stale_pages_are_refreshed_first(self):
+        self.ledger.settings(101,{'expiry':15})
+        for period,count in ((120,124),(600,24)):
+            self.ingest(*[{'type':'candle','symbol':'PAIR_otc','period':period,**r} for r in fixture(period)[-count:]])
+        tasks=self.ledger.bridge_plan(self.token,{'code':'ready'})['plan']['pairs'][0]['history']
+        self.assertEqual([t['period'] for t in tasks],[600])
+        self.assertEqual(tasks[0]['before'],self.now-24*600)
+        self.now+=1800
+        tasks=self.ledger.bridge_plan(self.token,{'code':'ready'})['plan']['pairs'][0]['history']
+        self.assertEqual([t['period'] for t in tasks],[120,600])
+        self.assertTrue(all('before' not in t for t in tasks),'Stale history needs the current page before any backfill')
+
     def test_higher_frames_use_only_complete_subintervals(self):
         rows=fixture(120)
         derived=history({('PAIR_otc',120):rows},'PAIR_otc',600,self.now)

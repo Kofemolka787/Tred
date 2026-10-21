@@ -2,14 +2,14 @@
 // Only read-only market requests on an already-open native Pocket socket.
 // No login, account mutation, chart switch, order or credential API exists here.
 (()=>{
-  const VERSION="0.3.14";
+  const VERSION="0.3.15";
   if(window.__tredMarketScanner?.version===VERSION)return;
   window.__tredMarketScanner?.stop();
   const sockets=new Map(),attempts=new Map(),pending=new Map();
   const pair=v=>typeof v==="string"&&/^[A-Za-z0-9][A-Za-z0-9_./ #-]{1,31}$/.test(v);
   const feed=v=>typeof v==="string"&&/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(v);
   let wanted=[],until=0,offset=0,timer=null,index=Math.floor(Date.now()/10),stopped=false,turn=0,lastTick=0;
-  const key=t=>t.feed_id+":"+t.symbol+":"+t.period;
+  const key=t=>t.feed_id+":"+t.symbol+":"+t.period+":"+(t.before??"latest");
   function schedule(){if(!stopped&&!timer&&wanted.length&&Date.now()/1000<until)timer=setTimeout(()=>{timer=null;tick();},400);}
   function tick(){
     if(stopped||Date.now()/1000>=until)return;
@@ -47,7 +47,8 @@
           stream.send('42'+JSON.stringify(["subfor",task.symbol]));
         }else{
           index=Math.max(index+1,Math.floor(Date.now()/10));
-          const request={asset:task.symbol,index,offset:task.period*task.bars,period:task.period,time:Math.floor((now+offset)/task.period)*task.period};
+          const end=task.before??now;
+          const request={asset:task.symbol,index,offset:task.period*task.bars,period:task.period,time:Math.floor((end+offset)/task.period)*task.period};
           stream.state.requests.set(index,{asset:task.symbol,period:task.period});
           while(stream.state.requests.size>80)stream.state.requests.delete(stream.state.requests.keys().next().value);
           pending.set(index,{key:taskKey,at:now,feed_id:task.feed_id,asset:task.symbol,period:task.period});
@@ -74,7 +75,8 @@
       if(row.quote!==false)tasks.push({symbol:row.symbol,feed_id:row.feed_id,period:1,bars:20,priority});
       for(const h of row.history){
         if(!h||![60,120,300,600,900].includes(h.period)||![5,160].includes(h.bars))return {code:"request_failed"};
-        tasks.push({symbol:row.symbol,feed_id:row.feed_id,period:h.period,bars:h.bars,priority});
+        if(h.before!==undefined&&(!Number.isSafeInteger(h.before)||h.bars!==160||h.before>Date.now()/1000||h.before<Date.now()/1000-1600*h.period||h.before%h.period>1))return {code:"request_failed"};
+        tasks.push({symbol:row.symbol,feed_id:row.feed_id,period:h.period,bars:h.bars,priority,...(h.before===undefined?{}:{before:h.before})});
       }
     }
     wanted=tasks;until=value.until;offset=value.offset;stopped=false;schedule();

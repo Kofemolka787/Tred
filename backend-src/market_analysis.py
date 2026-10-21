@@ -246,10 +246,17 @@ def coverage(assets, histories, *, market, expiry, min_payout, now):
         current = [s for s in setups if price_allows(s, asset["price"])]
         if setups and not current:
             strategy_reason = "Сценарий найден, но цена уже ушла от зоны или нарушила условие отмены."
+        available=[]
+        for period in (60,120,300,600,900):
+            stored=closed_tail(histories.get((asset['symbol'],period),[]),period,now)
+            if stored:
+                available.append({'period':period,'bars':len(stored),'last_time':stored[-1]['time'],
+                                  'age_seconds':max(0,round(now-stored[-1]['time']-period))})
         rows.append({"symbol": asset["symbol"], "payout": asset["payout"], "eligible": eligible, "metadata_eligible":status["metadata_eligible"],
                      "analysis_ready":bool(status['metadata_eligible'] and catalog_observed(asset,now) and all(a.get('history_ready') for a in checks)),
                      "quote_live": quote_live, "price": asset.get("price"), "quote_time": asset.get("quote_time"), "timeframes":list(selected), "tick_bars":[sum(r.get("origin")=="ticks" for r in rows) for rows in bars], "bars": [len(r) for r in bars],
                      "history_ready": all(a.get("history_ready") for a in checks),
+                     "available_history":available,
                      "strategies": list(dict.fromkeys(s["strategy_name"] for s in current)),
                      "regimes": [f["regime"] for f in frames],
                      "stage": status["code"] if status["code"]!="ready" else "history" if not all(a.get("history_ready") for a in checks) else "structure",

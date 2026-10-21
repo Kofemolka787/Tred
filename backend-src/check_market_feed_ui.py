@@ -79,6 +79,7 @@ with tempfile.TemporaryDirectory(prefix='tred-feed-ui-') as temporary:
                 expect(page.locator('#feed-coverage')).to_contain_text('готовы к анализу: 1',timeout=7000)
                 expect(page.locator('#coverage-list')).to_contain_text('loadHistoryPeriodFast')
                 expect(page.locator('#coverage-list')).to_contain_text('распознаны OHLC')
+                expect(page.locator('#coverage-list')).to_contain_text('На сервере, непрерывные закрытые свечи: M1: 160')
                 # Previous click was at the same fixture clock; respect 2s throttle.
                 current[0]+=3;command({'action':'advance','seconds':3});quotes()
                 page.locator('#request-signal').click()

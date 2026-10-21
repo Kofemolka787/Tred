@@ -106,6 +106,7 @@ window.TredSignals=(()=>{
     const list=$("#coverage-list");list.replaceChildren();
     for(const p of feed?.pairs||[]){
       const row=node("p","",`${p.symbol} · ${Math.round(p.payout*100)}% · ${p.quote_live?"цена поступает":"нет свежей цены"} · ${(p.timeframes||feed.timeframes).map((t,i)=>`M${t/60}: ${p.bars[i]}`).join(" / ")} · ${p.reason}`);
+      if(Array.isArray(p.available_history))row.append(node("small","",p.available_history.length?"На сервере, непрерывные закрытые свечи: "+p.available_history.map(h=>`M${h.period/60}: ${h.bars} · возраст ${h.age_seconds} с`).join("; "):"В этом канале пока нет сохранённых закрытых свечей."));
       if(p.regimes?.length){const labels={trend:"тренд",range:"боковик",transition:"переходный"};row.append(node("small","","Режим: "+p.regimes.map((r,i)=>`M${(p.timeframes||feed.timeframes)[i]/60} — ${labels[r]||r}`).join(" / ")));}
       const d=p.history_status;
       if(d){const labels={ohlc:"распознаны OHLC",ticks:"свечи по тикам",empty:"пустой ответ",period_missing:"в ответе нет таймфрейма",unsupported_period:"нужен поддерживаемый период свечи",format_unrecognized:"формат пока не распознан"};row.append(node("small","",`История: ${d.event} · ${d.period?"M"+d.period/60:"период не указан"} · строк ${d.rows} · распознано ${d.bars} · ${labels[d.code]||"ожидаем данные"}`));}
@@ -119,7 +120,7 @@ window.TredSignals=(()=>{
       strategyHelp.hidden=!feed?.strategy_catalog?.length;strategies.replaceChildren();
       for(const s of feed?.strategy_catalog||[]){const row=node("p");row.append(node("strong","",s.name),node("span",""," — "+s.rule),node("small","","Слабость: "+s.weakness));strategies.append(row);}
     }
-    $("#signals-upgrade").hidden=state.mode!=="api"||state.market_data_version===4&&!!feed?.strategy_catalog?.length;
+    $("#signals-upgrade").hidden=state.mode!=="api"||state.market_data_version===5&&!!feed?.strategy_catalog?.length;
     $("#ai-status").textContent=state.mode!=="api"?"ИИ подключается к твоему серверу TRED.":state.ai?.configured?`ИИ: ${state.ai.provider} · ${state.ai.model}. Ключ настроен; решение проверяется по свежим данным.`:"ИИ ещё не настроен. Запусти SETUP-LUNAROUTE.cmd на компьютере и введи ключ LunaRoute локально.";
     const help=$("#feed-help");
     if(feed?.blocked){
