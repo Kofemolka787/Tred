@@ -132,7 +132,10 @@ class StrategyRecognitionTests(unittest.TestCase):
             elif change=="corrupt":bad[("PAIR_otc",60)][-8]["low"]=99999
             else:bad={key:rows[-79:] for key,rows in bad.items()}
             self.assertEqual(snapshot([asset],bad,prefs,NOW)[1],[],change)
-        for changes in ({"quote_time":NOW-11},{"price":asset["price"]+10},{"payout":.84},{"is_open":False}):
+        quote_wait=snapshot([{**asset,'quote_time':NOW-11}],histories,prefs,NOW)[1]
+        self.assertTrue(quote_wait)
+        self.assertTrue(all(not s['entry_ready'] for s in quote_wait))
+        for changes in ({"price":asset["price"]+10},{"payout":.84},{"is_open":False}):
             self.assertEqual(snapshot([{**asset,**changes}],histories,prefs,NOW)[1],[])
         self.assertIsNone(frame(pattern("range_rebound"),60,NOW+1000))
 

@@ -50,7 +50,7 @@ def prepare_payload(snapshot):
     """Refs are rebuilt for each immutable batch and never for unavailable data."""
     refs, seen = [], set()
     for pair in snapshot['pairs']:
-        if not pair.get('data_ready'):
+        if not pair.get('analysis_ready',pair.get('data_ready')):
             continue
         for frame in pair.get('frames', []):
             period = frame.get('period')

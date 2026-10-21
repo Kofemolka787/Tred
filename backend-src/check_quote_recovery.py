@@ -33,7 +33,10 @@ with tempfile.TemporaryDirectory(prefix='tred-quotes-') as temporary:
         value=json.loads(json.loads(request.data)['input'][1]['content']);reviewed.append(value)
         assert request.full_url=='https://gw.lunaroute.com/v1/responses'
         d=FixtureAI().submit(1,value).result()['decision']
-        d={k:d[k] for k in ('action','symbol','direction','summary','risk','evidence')}
+        fields=('action','symbol','direction','summary','risk','evidence')
+        if 'strategy' in d:
+            fields+=('strategy',)
+        d={k:d[k] for k in fields}
         return io.BytesIO(json.dumps({'status':'completed','output':[{'content':[{'type':'output_text','text':json.dumps(d)}]}]}).encode())
     save(temporary,'lr_fixture_key_only_for_quote_recovery',allowed_users=[101],provider='lunaroute')
     ai=OpenAIAnalyzer(temporary,opener=provider)
@@ -68,28 +71,25 @@ with tempfile.TemporaryDirectory(prefix='tred-quotes-') as temporary:
         assert metadata==33 and before['quoted']==0 and before['ready']==0
         assert all(p['history_ready'] for p in before['pairs'])
         job=ledger.start_scan(101)
-        assert job['progress']['history_ready']==33 and not reviewed
-        if not options.legacy_server:assert job['phase']=='quotes'
+        assert job['progress']['history_ready']==33
+        # Research uses the real closed graphs, while no live price is invented.
+        ai.get(job['scan_id']).result(timeout=5)
+        result=ledger.poll_scan(101,{'scan_id':job['scan_id']})
+        assert result['status']=='loading' and result['phase']=='entry_quote',result
+        assert not result.get('direction') and ledger.state({'id':101})['feed']['quoted']==0
         command({'action':'auto'})
         for i in range(90):
             current[0]+=.4;command({'action':'advance','seconds':.4});command({'action':'tick'})
             if i%10==9:command({'action':'auto'})
+            if i%5==4:
+                result=ledger.poll_scan(101,{'scan_id':job['scan_id']})
+                if result['status']!='loading':break
         after=ledger.state({'id':101})['feed']
         assert after['quoted']>0 and after['ready']>0
-        assert not reviewed,'No model call before collection is complete or its deadline'
-        # Keep the original deadline and strict 10-second quote freshness.
-        jump=job['deadline']-current[0]+.1
-        current[0]+=jump;command({'action':'advance','seconds':jump})
-        histories();command({'action':'auto'})
-        for i in range(35):
-            current[0]+=.4;command({'action':'advance','seconds':.4});command({'action':'tick'})
-            if ledger.state({'id':101})['feed']['ready']:
-                break
-        result=ledger.poll_scan(101,{'scan_id':job['scan_id']})
-        ai.get(job['scan_id']).result(timeout=5)
         result=ledger.poll_scan(101,{'scan_id':job['scan_id']})
         assert result['status']=='candidate',result
         assert result['ai']['provider']=='LunaRoute' and result['total_pairs']==33
+        assert result['ai']['analyzed_charts']==33
         assert {p['symbol'] for batch in reviewed for p in batch['pairs']}=={f'PAIR{i}_otc' for i in range(33)}
         frames=command({'action':'outgoing'})['frames']
         probes=[f[1] for f in frames if f[0]=='loadHistoryPeriod' and f[1]['period']==1]
@@ -103,7 +103,7 @@ with tempfile.TemporaryDirectory(prefix='tred-quotes-') as temporary:
             assert 0<=current[0]-chosen['quote_time']<=10
             assert db.execute('SELECT count(*) FROM candles WHERE period=1').fetchone()[0]==0
         report={'ok':True,'legacy_server':bool(options.legacy_server),'history_ready_before':33,'quotes_before':0,'quotes_after':after['quoted'],
-            'all_33_pairs_reach_model':True,'silent_stream_recovered_by_timestamped_ticks':True,
+            'all_33_pairs_reach_model':True,'all_33_closed_graphs_analyzed':True,'no_entry_before_genuine_quote':True,'silent_stream_recovered_by_timestamped_ticks':True,
             'native_source_clock_preserved':True,'no_quote_from_ohlc_close':True,'no_period_1_research_candles':True,
             'freshness_10_seconds_unchanged':True,'balance_unchanged':True,'other_user_isolated':True,
             'no_order_or_chart_switch_commands':True,'real_broker_or_real_provider_verified':False}

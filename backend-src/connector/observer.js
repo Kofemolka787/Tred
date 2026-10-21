@@ -2,14 +2,14 @@
 // Observes data and connects the bounded read-only market scanner to the
 // existing socket. Login, cookies and outgoing auth frames are never copied.
 (() => {
-  if(window.__tredObserverVersion==="0.3.13")return;
-  window.__tredObserverVersion="0.3.13";
+  if(window.__tredObserverVersion==="0.3.14")return;
+  window.__tredObserverVersion="0.3.14";
   const Native = window.WebSocket;
   const contexts=new WeakMap();
   const number = v => typeof v === "number" && Number.isFinite(v);
   const safeSymbol = v => typeof v === "string" && /^[A-Za-z0-9][A-Za-z0-9_./ #-]{1,31}$/.test(v);
   const ts = v => number(v) ? (v > 1e11 ? v / 1000 : v) : null;
-  const emit = events => { for(let i=0;i<events.length;i+=250) window.postMessage({source:"tred-observer-v1",observer_version:"0.3.13",events:events.slice(i,i+250)},location.origin); };
+  const emit = events => { for(let i=0;i<events.length;i+=250) window.postMessage({source:"tred-observer-v1",observer_version:"0.3.14",events:events.slice(i,i+250)},location.origin); };
   const accountId = value => (typeof value === "string" || typeof value === "number" && Number.isSafeInteger(value)) && /^\d{1,20}$/.test(String(value)) && !/^0+$/.test(String(value)) ? String(value) : null;
   const idType = value => value===undefined?"none":value===null||value===""?"empty":value===0||typeof value==="string"&&/^0+$/.test(value)?"zero":accountId(value)?typeof value==="number"?"integer":"digits":Array.isArray(value)?"array":["number","string","boolean","object"].includes(typeof value)?typeof value==="string"?"text":typeof value:"other";
   const identity = async (name,data) => {
@@ -104,7 +104,7 @@
         if (!Array.isArray(row) || row.length < 16 || !safeSymbol(row[1]) || typeof row[3]!=="string" || !row[3] || !number(row[5]) || row[5] < 0 || row[5] > 100 || ![0,1,false,true].includes(row[9]) || ![0,1,false,true].includes(row[14])) continue;
         const expiries = Array.isArray(row[15]) ? row[15].map(x=>typeof x?.time==="string"&&/^\d+$/.test(x.time)?Number(x.time):x?.time).filter(x=>Number.isInteger(x)&&x>0&&x%60===0).map(x=>x/60) : [];
         state.catalog.set(row[1],{is_open:!!row[14]});
-        events.push({type:"asset",symbol:row[1],market:row[9] ? "otc" : "normal",is_open:!!row[14],payout:row[5]/100,expiries,time:now,feed_id:state.feed});
+        events.push({type:"asset",symbol:row[1],market:row[9] ? "otc" : "normal",is_open:!!row[14],payout:row[5]/100,expiries,time:now,feed_id:state.feed,history_scoped:true});
       }
     }
     if (name === "updateStream" && Array.isArray(data)) {
@@ -119,9 +119,9 @@
         rowCount+=rows.length;
         if([60,120,300,600,900].includes(period))for(const row of rows.slice(-1600)){
           const c=Array.isArray(row)&&row.length>=5?{time:ts(row[0]),open:row[1],close:row[2],high:row[3],low:row[4]}:row&&!Array.isArray(row)?{time:ts(row.time??row.timestamp),open:row.open,close:row.close,high:row.high,low:row.low}:{};
-          if(Object.keys(c).length===5&&Object.values(c).every(number)){events.push({type:"candle",symbol:data.asset,period,...c,source_clock:"po-market-native-v1"});ohlcRows++;}
+          if(Object.keys(c).length===5&&Object.values(c).every(number)){events.push({type:"candle",symbol:data.asset,period,...c,feed_id:state.feed,source_clock:"po-market-native-v1"});ohlcRows++;}
         }
-        for(const bar of tickBars(rows))events.push({type:"candle",symbol:data.asset,...bar,source_clock:"po-market-native-v1"});
+        for(const bar of tickBars(rows))events.push({type:"candle",symbol:data.asset,...bar,feed_id:state.feed,source_clock:"po-market-native-v1"});
       }
       const accepted=events.length-before;
       // A tick carries an actual observed price/time. An OHLC close is never
@@ -146,6 +146,9 @@
     }
     for(const event of events)if(event.type==="quote")window.__tredMarketScanner?.quoted(state,event.symbol,event.time);
     emit(events);
+    // A native message can progress read-only collection even when Opera
+    // delays the hidden page's timeout. Scanner pacing/concurrency still apply.
+    window.__tredMarketScanner?.wake?.();
   }
   class ObservedSocket extends Native {
     send(frame){

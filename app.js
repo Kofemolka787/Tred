@@ -137,7 +137,7 @@ function renderAccount() {
     card.append(label,balance,detail); list.append(card);
   });
   const feed=current.feed,metadata=feed?.metadata_eligible??feed?.pairs?.filter(p=>!["closed","payout","expiry"].includes(p.stage)).length??feed?.eligible;
-  text("#analysis-caption",feed?`Анализ · по каталогу подходят ${metadata} · со свежей ценой ${feed.quoted}`:"Анализ: ждём подключение данных");
+  text("#analysis-caption",feed?`Анализ · графиков ${feed.analysis_ready??feed.ready} / ${metadata} · свежих цен ${feed.quoted}`:"Анализ: ждём подключение данных");
 }
 function fillTrades(selector,trades,paper=false) {
   const list = $(selector); list.replaceChildren();
@@ -202,7 +202,7 @@ $("#open-pocket").addEventListener("click", () => {
 $("#request-signal").addEventListener("click", async () => {
   if (!authorized || busy) return;
   if (current.mode === "device") { $("#connect-dialog").showModal(); return; }
-  if(current.market_data_version!==3){notify("Обнови сервер до 0.3.23 — инструкция в кабинете.");return;}
+  if(current.market_data_version!==4){notify("Обнови сервер до 0.3.24 — инструкция в кабинете.");return;}
   const ticket={cancelled:false,client:dataClient,generation:connectGeneration,id:null};activeScan=ticket;
   setBusy(true);
   try {
@@ -213,7 +213,7 @@ $("#request-signal").addEventListener("click", async () => {
       current=result.state;render();window.TredSignals.show(result);
       if(first){$("#signal-result").scrollIntoView({block:"start",behavior:"smooth"});first=false;}
       if(result.status!=="loading")break;
-      text("#request-signal strong",result.phase==="ai"?"ИИ АНАЛИЗИРУЕТ…":"ЗАГРУЖАЕМ РЫНОК…");
+      text("#request-signal strong",result.phase==="ai"?"ИИ АНАЛИЗИРУЕТ…":result.phase==="entry_quote"?"ПРОВЕРЯЕМ ВХОД…":"ЗАГРУЖАЕМ РЫНОК…");
       await new Promise(resolve=>setTimeout(resolve,2000));
       if(ticket.cancelled||ticket.client!==dataClient||ticket.generation!==connectGeneration)break;
       result=await api("/api/scan/poll",{scan_id:ticket.id});

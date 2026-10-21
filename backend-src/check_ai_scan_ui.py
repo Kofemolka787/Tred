@@ -124,6 +124,17 @@ with tempfile.TemporaryDirectory(prefix='tred-ai-scan-') as temporary:
                 assert ledger.state({'id':101})['accounts'][0]['balance'] == '94.00'
                 assert ledger.state({'id':202})['signal_sessions'] == []
                 assert fixture_key not in page.content()
+                # The same charts stay available when all current quotes age.
+                # The model may review them, but no entry appears until a new
+                # genuine selected-pair quote reaches the API.
+                current[0]+=11;command({'action':'advance','seconds':11})
+                page.locator('#request-signal').click()
+                expect(page.locator('#signal-result')).to_contain_text('Проверяем цену входа',timeout=15000)
+                assert page.locator('#watch-entry').count()==0
+                assert any(p.get('analysis_ready') and not p['data_ready'] for v in model_requests for p in v['pairs'])
+                command({'action':'auto'});command({'action':'tick'})
+                expect(page.locator('#signal-result h2')).to_contain_text('PAIR0_otc',timeout=15000)
+                assert 'живой котировки' not in page.locator('#signal-result').inner_text()
                 # A completed but malformed model response has its own safe UI
                 # diagnostic, separate from a genuine wait or transport outage.
                 model_mode[0]='malformed';current[0]+=3
@@ -139,6 +150,7 @@ with tempfile.TemporaryDirectory(prefix='tred-ai-scan-') as temporary:
                           'actual_responses_client_with_fixture_provider':True, 'market_only_payload':True, 'key_absent_from_browser':True,
                           'entry_time_and_duration_visible':True, 'no_order_or_chart_switch_requests':True, 'balance_unchanged':True, 'other_user_isolated':True,
                           'completed_fenced_json_with_evidence_refs_accepted':True, 'malformed_response_has_specific_safe_ui_error':True,
+                          'closed_graphs_reviewed_without_live_quotes':True,'entry_waits_for_genuine_selected_quote':True,
                           'page_errors':errors, 'native_broker_or_real_provider_service_verified':False}
                 (ROOT/'artifacts/ai-scan-check.json').write_text(json.dumps(report,indent=2)+'\n'); print(json.dumps(report))
             finally: browser.close()

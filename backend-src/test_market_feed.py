@@ -63,6 +63,57 @@ class MarketFeedTests(unittest.TestCase):
             self.assertEqual(self.state()['feed']['pairs'][0]['stage'],stage)
             self.assertEqual(self.state()['feed']['eligible'],0)
 
+    def test_catalog_diagnostics_distinguish_closed_mismatched_and_legacy_sources(self):
+        from market_feed import gate
+        with self.ledger.db() as db:
+            asset=dict(db.execute('SELECT * FROM assets').fetchone())
+        asset['expiries']=[5,10,15]
+        pair=gate({**asset,'quote_feed':OTHER},expiry=5,min_payout=.85,now=self.now)
+        self.assertEqual(pair['code'],'catalog')
+        self.assertIn('разных соединений',pair['reason'])
+        self.ingest({'type':'feed','feed_id':FEED,'connected':False,'time':self.now})
+        self.assertIn('закрылся',self.state()['feed']['pairs'][0]['reason'])
+        self.now+=1
+        self.ingest({k:v for k,v in {**self.asset,'time':self.now}.items() if k!='feed_id'})
+        self.now+=61
+        self.assertIn('старого модуля',self.state()['feed']['pairs'][0]['reason'])
+        self.assertEqual(self.state()['feed']['eligible'],0)
+
+    def test_other_socket_and_delayed_ticks_cannot_replace_current_price_or_path(self):
+        self.now+=1
+        self.ingest(self.quote(feed_id=OTHER,price=777))
+        pair=self.state()['feed']['pairs'][0]
+        self.assertTrue(pair['eligible'])
+        self.assertEqual(pair['price'],106.30)
+        with self.ledger.db() as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM quote_samples').fetchone()[0],1)
+        self.ingest(self.quote(price=106.31))
+        self.ingest(self.quote(time=self.now-.5,price=999))
+        self.assertEqual(self.state()['feed']['pairs'][0]['price'],106.31)
+        with self.ledger.db() as db:
+            self.assertEqual(db.execute('SELECT max(price) FROM quote_samples').fetchone()[0],106.31)
+
+    def test_scoped_history_never_mixes_channels_or_revives_previous_chart(self):
+        self.now+=1
+        self.ingest({**self.asset,'time':self.now,'history_scoped':True})
+        bar={'type':'candle','symbol':'PAIR_otc','period':60,**fixture()[-1],'feed_id':FEED}
+        self.ingest(bar,{**bar,'feed_id':OTHER,'high':900})
+        with self.ledger.db() as db:
+            self.assertNotEqual(db.execute('SELECT high FROM candles').fetchone()[0],900)
+        with self.assertRaises(DomainError):self.ingest({k:v for k,v in bar.items() if k!='feed_id'})
+        self.now+=1
+        self.ingest({**self.asset,'time':self.now,'history_scoped':True,'feed_id':OTHER})
+        with self.ledger.db() as db:
+            _,_,histories=self.ledger._market(db,101)
+            self.assertEqual(histories[('PAIR_otc',60)],[])
+            self.assertEqual(db.execute('SELECT count(*) FROM live_bars').fetchone()[0],0)
+        self.ingest({**bar,'high':901})
+        self.ingest({**bar,'feed_id':OTHER,'high':107})
+        with self.ledger.db() as db:
+            _,_,histories=self.ledger._market(db,101)
+            self.assertEqual(histories[('PAIR_otc',60)][0]['high'],107)
+            self.assertEqual(db.execute('SELECT feed_id FROM candles').fetchone()[0],OTHER)
+
     def test_live_ticks_create_closed_bars_only_and_broker_ohlc_wins(self):
         # Initial 106.30 point at :00, then complete coverage at five-second steps.
         initial=self.now
@@ -90,6 +141,20 @@ class MarketFeedTests(unittest.TestCase):
             candidates,_=rank(assets,histories,expiry=expiry,market='otc',symbol=None,allow_otc=True,now=self.now)
             self.assertTrue(candidates)
             self.assertEqual(candidates[0]['timeframes'],[120,600])
+
+    def test_bounded_reads_still_load_deep_history_needed_for_m15_aggregation(self):
+        from market_analysis import frame_data
+        self.ledger.settings(101,{'expiry':15})
+        rows=fixture(300)
+        extended=[{**r,'time':r['time']-160*300} for r in rows]+rows
+        for start in range(0,len(extended),250):
+            self.ingest(*[{'type':'candle','symbol':'PAIR_otc','period':300,**r} for r in extended[start:start+250]])
+        with self.ledger.db() as db:
+            _,_,histories=self.ledger._market(db,101)
+        periods,bars,checks=frame_data(histories,'PAIR_otc',15,self.now)
+        self.assertEqual(periods,(300,900))
+        self.assertTrue(all(c.get('history_ready') for c in checks))
+        self.assertGreaterEqual(len(bars[1]),80)
 
     def test_higher_frames_use_only_complete_subintervals(self):
         rows=fixture(120)

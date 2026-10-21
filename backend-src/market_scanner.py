@@ -2,8 +2,8 @@
 import json
 import math
 
-from market_analysis import PERIODS, frame_data
-from market_feed import catalog_current
+from market_analysis import PERIODS, frame_data, same_setup
+from market_feed import catalog_current, catalog_observed
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS scan_bridge(user_id INTEGER PRIMARY KEY,seen_at REAL NOT NULL,code TEXT NOT NULL);
@@ -11,6 +11,14 @@ CREATE TABLE IF NOT EXISTS scan_jobs(id INTEGER PRIMARY KEY,user_id INTEGER NOT 
 CREATE INDEX IF NOT EXISTS scan_jobs_owner ON scan_jobs(user_id,id);
 """
 CODES = ("ready", "no_tab", "no_socket", "waiting_catalog", "request_failed", "unsupported_module")
+
+
+def migrate(db):
+    columns={r[1] for r in db.execute('PRAGMA table_info(scan_jobs)')}
+    if 'watch_symbols' not in columns:
+        db.execute("ALTER TABLE scan_jobs ADD COLUMN watch_symbols TEXT NOT NULL DEFAULT '[]'")
+    if 'quote_until' not in columns:
+        db.execute('ALTER TABLE scan_jobs ADD COLUMN quote_until REAL')
 
 
 def selection(asset, prefs):
@@ -42,6 +50,8 @@ class MarketScanner:
             candidates = pool(assets, prefs)
             # Active observations remain streamed when the selected market changes.
             watched = {r[0] for r in db.execute("SELECT symbol FROM signal_sessions WHERE user_id=? AND result IS NULL AND expires_at>?", (uid, now))}
+            for row in db.execute("SELECT watch_symbols FROM scan_jobs WHERE user_id=? AND status='ai' AND started_at>?",(uid,now-240)):
+                watched.update(json.loads(row[0]))
             for row in db.execute("SELECT result FROM analysis WHERE user_id=? ORDER BY id DESC LIMIT 5", (uid,)):
                 result = json.loads(row[0])
                 if result.get("status") == "candidate" and result.get("valid_until", 0) > now:
@@ -70,21 +80,25 @@ class MarketScanner:
                     if not complete or not data or data[-1]["time"] < closed:
                         needed.append({"period": period, "bars": 160 if not complete else 5})
                 quoted = a.get("quote_time") is not None and now-a["quote_time"] <= 8 and a.get("quote_feed") == a["catalog_feed"]
-                rows.append({"symbol": a["symbol"], "feed_id": a["catalog_feed"], "history": needed, "quote": not quoted})
+                priority=a['symbol'] in watched
+                # Focused instruments keep a task present even between polls;
+                # MAIN skips it while its own genuine tick is <=5 seconds old.
+                rows.append({"symbol": a["symbol"], "feed_id": a["catalog_feed"], "history": needed, "quote": priority or not quoted,"priority":priority})
             return {"ok": True, "plan": {"version": 1, "until": now + 15, "pairs": rows, "total": len(candidates)}}
 
     def _scan_progress(self, db, uid, prefs, assets, histories, now):
         eligible = pool(assets, prefs)
-        ready = quoted = history_ready = 0
+        ready = quoted = history_ready = analysis_ready = 0
         for a in eligible:
             _, _, checks = frame_data(histories, a["symbol"], prefs["expiry"], now)
             enough = all(c.get("history_ready") for c in checks)
             current = a.get("quote_time") is not None and now - a["quote_time"] <= 10
             history_ready += enough
+            analysis_ready += bool(enough and catalog_observed(a,now))
             quoted += current
             ready += bool(enough and current and catalog_current(a, now))
         bridge = db.execute("SELECT * FROM scan_bridge WHERE user_id=?", (uid,)).fetchone()
-        return {"total": len(eligible), "checked": ready, "history_ready": history_ready, "quoted": quoted,
+        return {"total": len(eligible), "checked": ready, "history_ready": history_ready,'analysis_ready':analysis_ready, "quoted": quoted,
                 "bridge_live": bool(bridge and now - bridge["seen_at"] <= 20),
                 "bridge_code": bridge["code"] if bridge and now - bridge["seen_at"] <= 20 else "offline"}
 
@@ -124,13 +138,18 @@ class MarketScanner:
                 return {"status": "cancelled", "scan_id": job["id"], "reason": "Проверка остановлена."}
             progress = self._scan_progress(db, uid, prefs, assets, histories, now)
             risk = self._risk(db, uid)
-            if not risk["locked"] and not self.ai.get(job["id"]) and now < job["deadline"] and (not progress["total"] or progress["checked"] < progress["total"]):
+            # A silent pair must not hold every other complete chart until the
+            # cold-catalog deadline. Include the whole inventory in the model
+            # input, but start after a short collection window if any charts
+            # are usable. Missing graphs remain explicitly data_ready=false.
+            partial_ready=progress['analysis_ready']>0 and now-job['started_at']>=12
+            if not risk["locked"] and not self.ai.get(job["id"]) and now < job["deadline"] and not partial_ready and (not progress["total"] or progress["analysis_ready"] < progress["total"]):
                 missing_quotes = progress["history_ready"] > 0 and not progress["quoted"]
                 return {"status": "loading", "phase": "quotes" if missing_quotes else "history", "scan_id": job["id"], "deadline": job["deadline"], "progress": progress,
                         "reason": "История уже поступает, но свежих цен пока нет. Расширение повторяет подписки и запрашивает последние тики. Оставь Pocket Option и сервер открытыми." if missing_quotes else "Расширение автоматически запрашивает историю и котировки доступных пар. Для анализа нужны 80 закрытых свечей на двух таймфреймах. Оставь Pocket Option и сервер открытыми."}
             if risk["locked"]:
                 result = {"status": "skipped", "reason": risk["reason"]}
-            elif progress["checked"] or self.ai.get(job["id"]):
+            elif progress["analysis_ready"] or self.ai.get(job["id"]):
                 from ai_market import AIError, snapshot
                 try:
                     future = self.ai.get(job["id"])
@@ -141,7 +160,10 @@ class MarketScanner:
                             raise AIError("API-доступ изменился. Проверь SETUP-AI.cmd на компьютере.")
                         value, _ = snapshot(assets, histories, prefs, now)
                         future = self.ai.submit(job["id"], value)
-                        db.execute("UPDATE scan_jobs SET status='ai' WHERE id=?", (job["id"],))
+                        # Closed-graph research does not need fresh ticks for
+                        # every candidate simultaneously. Reserve focused tick
+                        # recovery for the actual choice, keeping history moving.
+                        db.execute("UPDATE scan_jobs SET status='ai',watch_symbols='[]' WHERE id=?", (job["id"],))
                     if not future.done():
                         return {"status": "loading", "phase": "ai", "scan_id": job["id"], "deadline": job["deadline"], "progress": progress,
                                 "reason": f"{self.ai.status(uid)['provider']} сравнивает Smart Money, откаты, ретесты, отскоки и ложные пробои с учётом режима рынка. Решение появится здесь автоматически; повторно нажимать кнопку не нужно."}
@@ -150,18 +172,34 @@ class MarketScanner:
                     info = {k: decision[k] for k in ("provider", "model", "elapsed_ms", "reviewed_pairs", "batches")}
                     info.update(summary=decision["summary"], risk=decision["risk"], evidence=decision["evidence"], as_of=original["as_of"],
                                 ready_pairs=sum(p.get("data_ready", False) for p in original["pairs"]),
+                                analyzed_charts=sum(p.get('analysis_ready',p.get('data_ready',False)) for p in original['pairs']),
                                 qualified_setups=len(original["qualified"]))
                     result = {"status": "skipped", "reason": decision["summary"], "ai": info}
                     if decision["action"] == "enter":
                         _, fresh = snapshot(assets, histories, prefs, now)
-                        selected = next((c for c in fresh if (c["symbol"], c["direction"], c["strategy"]) == (decision["symbol"], decision["direction"], decision["strategy"])), None)
+                        selected = next((c for c in fresh if c['entry_ready'] and (c["symbol"], c["direction"], c["strategy"]) == (decision["symbol"], decision["direction"], decision["strategy"])), None)
                         prior = next((q for q in original["qualified"] if (q["symbol"], q["direction"], q["strategy"]) == (decision["symbol"], decision["direction"], decision["strategy"])), None)
-                        if selected and prior and selected["bar_time"] == prior["bar_time"] and selected["context_bar_time"] == prior["context_bar_time"] and selected["timeframes"] == prior["timeframes"] and prior["entry_low"] <= selected["price"] <= prior["entry_high"] and now - original["as_of"] <= 180:
+                        live_window=selected and (selected['strategy']=='smart_money' and selected['zones'] or now<selected['bar_time']+2*selected['timeframes'][0])
+                        if selected and prior and live_window and same_setup(selected,prior) and prior["entry_low"] <= selected["price"] <= prior["entry_high"] and now - original["as_of"] <= 180:
                             result = {"status": "candidate", **selected, "expiry": prefs["expiry"], "entry_at": now, "valid_until": now + 30, "expires_at": now + prefs["expiry"] * 60,
                                       "validated": False, "min_payout": prefs["min_payout"] / 100, "probability": None, "ai": info,
                                       "reason": decision["summary"], "evidence": [*["ИИ: " + e["explanation"] for e in decision["evidence"]], *selected["evidence"]]}
+                            result['entry_low']=max(selected['entry_low'],prior['entry_low'])
+                            result['entry_high']=min(selected['entry_high'],prior['entry_high'])
+                            if selected['strategy']!='smart_money' or not selected['zones']:
+                                result['valid_until']=min(result['valid_until'],selected['bar_time']+2*selected['timeframes'][0])
                         else:
-                            result["reason"] = "Пока ИИ анализировал данные, цена или закрытые свечи изменились. Старый вход пропущен; запроси новый анализ."
+                            asset=next((a for a in assets if a['symbol']==decision['symbol']),None)
+                            needs_quote=prior and asset and selection(asset,prefs) and catalog_observed(asset,now) and not catalog_current(asset,now) and now-original['as_of']<=180
+                            if needs_quote:
+                                until=job['quote_until'] if job['quote_until'] is not None else now+12
+                                db.execute("UPDATE scan_jobs SET quote_until=?,watch_symbols=? WHERE id=?",(until,json.dumps([decision['symbol']]),job['id']))
+                                if now<until:
+                                    return {'status':'loading','phase':'entry_quote','scan_id':job['id'],'deadline':until,'progress':progress,
+                                            'reason':f"ИИ выбрал сценарий {decision['symbol']}. Запрашиваем текущую цену этой пары и проверяем зону. Направление входа появится только после проверки; повторный запрос ИИ не отправляется."}
+                                result.update(waiting_data=True,reason='Не получена свежая цена выбранной пары. Вход не показан; история свечей не используется вместо живой котировки.')
+                            else:
+                                result["reason"] = "Пока ИИ анализировал данные, цена или условия сценария изменились. Старый вход пропущен; запроси новый анализ."
                 except AIError as error:
                     result = {"status": "ai_unavailable", "reason": str(error), 'ai_error_code':error.code}
                 except Exception:
@@ -169,7 +207,7 @@ class MarketScanner:
             else:
                 result = {"status": "skipped", "waiting_data": True, "reason": "История или свежие котировки ещё не получены."}
             result.update({"scan_id": job["id"], "progress": progress, "checked_pairs": progress["checked"], "total_pairs": progress["total"]})
-            if result["status"] == "skipped" and not risk["locked"] and not progress["checked"]:
+            if result["status"] == "skipped" and not risk["locked"] and not progress["analysis_ready"]:
                 result["waiting_data"] = True
                 result["reason"] = "Не удалось получить полный набор свежих данных. Проверь, что обновлённое расширение включено, Pocket Option открыт и вход выполнен. В списке пар показано, каких данных не хватает."
             cursor = db.execute("INSERT INTO analysis(user_id,created_at,result) VALUES (?,?,?)", (uid, now, json.dumps(result)))

@@ -91,13 +91,19 @@ with tempfile.TemporaryDirectory(prefix='tred-feed-ui-') as temporary:
                 page.locator('#watch-entry').click()
                 expect(page.locator('#live-sessions')).to_contain_text('До завершения')
                 command({'action':'close'})
-                expect(page.locator('#feed-coverage')).to_contain_text('выплата и время подходят: 0',timeout=7000)
+                # Payout/expiry metadata remains visible after disconnect;
+                # source continuity and entry eligibility must be invalidated.
+                expect(page.locator('#feed-coverage')).to_contain_text('готовы к анализу: 0',timeout=7000)
+                expect(page.locator('#coverage-list')).to_contain_text('Канал, передавший каталог, закрылся')
+                closed=ledger.state({'id':101})['feed']
+                assert closed['metadata_eligible']==16
+                assert closed['eligible']==closed['ready']==closed['analysis_ready']==0
                 assert ledger.state({'id':202})['signal_sessions']==[]
                 assert ledger.state({'id':101})['accounts'][0]['balance']=='94.00'
                 assert not errors,errors
                 (ROOT/'artifacts').mkdir(exist_ok=True)
                 page.locator('#live-sessions').scroll_into_view_if_needed();page.screenshot(path=str(ROOT/'artifacts/market-feed-mobile.png'))
-                report={'ok':True,'raw_fast_binary_to_real_observer_worker_api_ui':True,'same_socket_catalog_after_123_seconds_without_restamping':True,'16_live_pairs_no_history_is_data_wait_not_fake_direction':True,'fast_history_makes_real_smc_candidate':True,'entry_accepts_valid_same_socket_catalog':True,'close_invalidates_metadata':True,'balance_unchanged':True,'other_user_isolated':True,'no_extension_initiated_broker_requests':True,'elapsed_ms':result.get('elapsed_ms'),'page_errors':errors,'owner_native_feed_verified':False}
+                report={'ok':True,'raw_fast_binary_to_real_observer_worker_api_ui':True,'same_socket_catalog_after_123_seconds_without_restamping':True,'16_live_pairs_no_history_is_data_wait_not_fake_direction':True,'fast_history_makes_real_smc_candidate':True,'entry_accepts_valid_same_socket_catalog':True,'close_invalidates_entry_and_analysis':True,'balance_unchanged':True,'other_user_isolated':True,'no_extension_initiated_broker_requests':True,'elapsed_ms':result.get('elapsed_ms'),'page_errors':errors,'owner_native_feed_verified':False}
                 (ROOT/'artifacts/market-feed-check.json').write_text(json.dumps(report,indent=2)+'\n');print(json.dumps(report))
             finally:browser.close()
     finally:

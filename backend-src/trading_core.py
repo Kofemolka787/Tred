@@ -87,6 +87,8 @@ class Ledger(SignalSessions, MarketScanner):
             """)
             db.executescript(SCHEMA)
             db.executescript(SCAN_SCHEMA)
+            from market_scanner import migrate as migrate_scanner
+            migrate_scanner(db)
             migrate_feed(db)
             if "run_day" not in {r[1] for r in db.execute("PRAGMA table_info(risk)")}:
                 db.execute("ALTER TABLE risk ADD COLUMN run_day INTEGER")
@@ -240,9 +242,33 @@ class Ledger(SignalSessions, MarketScanner):
     def _market(self, db, uid):
         prefs = json.loads(db.execute("SELECT settings FROM profiles WHERE user_id=?", (uid,)).fetchone()[0])
         assets = [{**dict(x),"expiries":json.loads(x["expiries"])} for x in db.execute("SELECT * FROM assets WHERE user_id=?", (uid,))]
+        # Most native histories already contain 80 complete recent bars. Do not
+        # reread years of the other instruments' stored bars on every 2s poll.
+        # Deeper lower-period data is loaded only when aggregation is needed.
+        from market_strategies import closed_tail, valid_bar
+        from market_analysis import PERIODS
         histories = {}
-        for x in db.execute("SELECT symbol,period,time,open,high,low,close,origin FROM candles WHERE user_id=? ORDER BY time", (uid,)):
-            histories.setdefault((x["symbol"], x["period"]), []).append(dict(x))
+        def load(pair, period, limit):
+            metadata=by_symbol[pair]
+            scope="feed_id=?" if metadata['history_scoped'] else "(feed_id IS NULL OR feed_id=?)"
+            rows=[dict(x) for x in db.execute("SELECT symbol,period,time,open,high,low,close,origin FROM candles WHERE user_id=? AND symbol=? AND period=? AND "+scope+" ORDER BY time DESC LIMIT ?",(uid,pair,period,metadata['catalog_feed'],limit))]
+            histories[(pair,period)]=list(reversed(rows))
+        by_symbol={a['symbol']:a for a in assets}
+        now=self.clock()
+        def native_ready(pair, period):
+            rows=closed_tail(histories.get((pair,period),[]),period,now)
+            return len(rows)>=80 and now-(rows[-1]["time"]+period)<=period+10 and all(valid_bar(r) for r in rows)
+        for asset in assets:
+            pair=asset['symbol']
+            for period in (60,120,300,600,900):
+                load(pair,period,160)
+            if not all(native_ready(pair,p) for p in PERIODS[prefs['expiry']]):
+                deeper=set()
+                for target in (120,300,600,900):
+                    if not native_ready(pair,target):
+                        deeper.update(p for p in (60,120,300,600) if p<target and target%p==0 and histories[(pair,p)])
+                for period in deeper:
+                    load(pair,period,1600)
         prefs.setdefault("min_payout", 85)
         return prefs, assets, histories
 
@@ -302,9 +328,9 @@ class Ledger(SignalSessions, MarketScanner):
                   "asset": {"type","symbol","market","is_open","payout","time"},
                   "quote": {"type","symbol","price","time"},
                   "candle": {"type","symbol","period","time","open","high","low","close"}}
-        fields["asset"].update(("expiries","feed_id"))
+        fields["asset"].update(("expiries","feed_id","history_scoped"))
         fields["quote"].add("feed_id")
-        fields["candle"].add("origin")
+        fields["candle"].update(("origin","feed_id"))
         fields["feed"] = {"type","feed_id","connected","time"}
         fields["history_status"] = {"type","symbol","event","period","rows","bars","code","time"}
         required = {"account":{"mode","account_id","currency","balance"},"trade":{"mode","account_id","id","symbol","direction","stake","opened_at","expires_at","status"},"asset":{"symbol","market","is_open","payout","expiries"},"quote":{"symbol","price"},"candle":{"symbol","period","open","high","low","close"}}
@@ -367,18 +393,31 @@ class Ledger(SignalSessions, MarketScanner):
             expiries = e.get("expiries")
             if e.get("market") not in ("normal","otc") or type(e.get("is_open")) is not bool or type(payout) not in (int,float) or not math.isfinite(payout) or not 0 <= payout <= 1 or e["is_open"] and payout == 0 or not isinstance(expiries,list) or len(expiries)>100 or any(type(x) is not int or not 1<=x<=1440 for x in expiries):
                 raise DomainError("Некорректная доступность или выплата пары.")
-            db.execute("INSERT INTO assets(user_id,symbol,market,is_open,payout,updated_at,expiries,catalog_feed,feed_connected) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(user_id,symbol) DO UPDATE SET market=excluded.market,is_open=excluded.is_open,payout=excluded.payout,updated_at=excluded.updated_at,expiries=excluded.expiries,catalog_feed=excluded.catalog_feed,feed_connected=excluded.feed_connected WHERE excluded.updated_at>assets.updated_at", (uid,pair,e["market"],int(e["is_open"]),payout,at,json.dumps(expiries),feed_id,int(feed_id is not None)))
+            scoped=e.get('history_scoped',False)
+            if type(scoped) is not bool or scoped and not feed_id:
+                raise DomainError("Не определён источник истории графика.")
+            old=db.execute('SELECT catalog_feed FROM assets WHERE user_id=? AND symbol=?',(uid,pair)).fetchone()
+            changed=db.execute("INSERT INTO assets(user_id,symbol,market,is_open,payout,updated_at,expiries,catalog_feed,feed_connected,history_scoped) VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(user_id,symbol) DO UPDATE SET market=excluded.market,is_open=excluded.is_open,payout=excluded.payout,updated_at=excluded.updated_at,expiries=excluded.expiries,catalog_feed=excluded.catalog_feed,feed_connected=excluded.feed_connected,history_scoped=excluded.history_scoped WHERE excluded.updated_at>assets.updated_at", (uid,pair,e["market"],int(e["is_open"]),payout,at,json.dumps(expiries),feed_id,int(feed_id is not None),int(scoped))).rowcount
+            if changed and old and old[0]!=feed_id:
+                db.execute('DELETE FROM live_bars WHERE user_id=? AND symbol=?',(uid,pair))
         elif kind == "quote":
             pair, price = symbol(e.get("symbol")), e.get("price")
             if type(price) not in (int,float) or not math.isfinite(price) or not 0 < price <= 1e9:
                 raise DomainError("Некорректная цена.")
-            db.execute("UPDATE assets SET price=?,quote_time=?,quote_feed=? WHERE user_id=? AND symbol=? AND (quote_time IS NULL OR quote_time<?)", (price,at,feed_id,uid,pair,at))
-            if db.execute("SELECT 1 FROM assets WHERE user_id=? AND symbol=?", (uid,pair)).fetchone():
-                live_tick(db,uid,pair,at,price)
+            changed=db.execute("UPDATE assets SET price=?,quote_time=?,quote_feed=? WHERE user_id=? AND symbol=? AND (quote_time IS NULL OR quote_time<?) AND (catalog_feed IS NULL OR (feed_connected=1 AND catalog_feed=?))", (price,at,feed_id,uid,pair,at,feed_id)).rowcount
+            # A different or closed socket cannot replace this catalog's live
+            # price or contaminate its observed path/tick-built candles.
+            if changed:
+                live_tick(db,uid,pair,at,price,feed_id)
                 db.execute("INSERT OR IGNORE INTO quote_samples VALUES (?,?,?,?)", (uid,pair,int(at),price))
                 db.execute("DELETE FROM quote_samples WHERE user_id=? AND symbol=? AND time<?", (uid,pair,now-7200))
         elif kind == "candle":
             pair, period = symbol(e.get("symbol")), e.get("period")
+            source=db.execute('SELECT catalog_feed,feed_connected,history_scoped FROM assets WHERE user_id=? AND symbol=?',(uid,pair)).fetchone()
+            if feed_id is not None and (not source or source['catalog_feed']!=feed_id or not source['feed_connected']):
+                return
+            if source and source['history_scoped'] and feed_id is None:
+                raise DomainError("История без канала источника. Обнови расширение TRED.")
             prices = [e.get(k) for k in ("open","high","low","close")]
             if type(period) is not int or period not in (60,120,300,600,900) or any(type(v) not in (int,float) or not math.isfinite(v) or not 0 < v <= 1e9 for v in prices):
                 raise DomainError("Некорректная свеча.")
@@ -388,7 +427,7 @@ class Ledger(SignalSessions, MarketScanner):
             origin = e.get("origin","broker")
             if origin not in ("broker","ticks"):
                 raise DomainError("Неподдерживаемый источник свечи.")
-            db.execute("INSERT INTO candles(user_id,symbol,period,time,open,high,low,close,origin) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(user_id,symbol,period,time) DO UPDATE SET open=excluded.open,high=excluded.high,low=excluded.low,close=excluded.close,origin=excluded.origin WHERE candles.origin='ticks' AND excluded.origin='broker'", (uid,pair,period,at,o,h,l,c,origin))
+            db.execute("INSERT INTO candles(user_id,symbol,period,time,open,high,low,close,origin,feed_id) VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(user_id,symbol,period,time) DO UPDATE SET open=excluded.open,high=excluded.high,low=excluded.low,close=excluded.close,origin=excluded.origin,feed_id=excluded.feed_id WHERE candles.feed_id IS NOT excluded.feed_id OR (candles.origin='ticks' AND excluded.origin='broker')", (uid,pair,period,at,o,h,l,c,origin,feed_id))
             db.execute("DELETE FROM candles WHERE user_id=? AND symbol=? AND period=? AND time<?", (uid,pair,period,now-1600*period))
 
     def _settle(self, db, uid, now):
@@ -464,4 +503,4 @@ class Ledger(SignalSessions, MarketScanner):
                 "goal":{"start":amount(start), "target":amount(target), "earned":amount(goal_pnl), "current":amount(start+goal_pnl), "progress":max(0,min(1,goal_pnl/(target-start))), "source":"observed_real_settlements", "available":real_account is not None},
                 "statistics":{"signals":sum(outcomes.values()),"wins":wins,"losses":losses,"draws":outcomes.get("draw",0),"win_rate":wins/(wins+losses) if wins+losses else None},
                 "connection":{"authenticated":paired,"live":live,"model_ready":False,"reason":"Котировки поступают. Анализ по проверяемым правилам структуры." if live else "Подключи модуль браузера для котировок, баланса и сделок."},
-                "signal_sessions":sessions, "signal_version":1, "market_data_version":3, "ai":self.ai.status(uid), "feed":feed, "recent_requests":recent, "catalog":{"verified_count":count}, "minimum_expiry":5, "bot_username":"Tr1edBot_bot", "server_time":now}
+                "signal_sessions":sessions, "signal_version":1, "market_data_version":4, "ai":self.ai.status(uid), "feed":feed, "recent_requests":recent, "catalog":{"verified_count":count}, "minimum_expiry":5, "bot_username":"Tr1edBot_bot", "server_time":now}

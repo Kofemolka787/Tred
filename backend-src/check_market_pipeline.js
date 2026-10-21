@@ -48,7 +48,7 @@ rl.on('line',line=>{chain=chain.then(async()=>{
  else if(request.action==='fixtures')fixtures=request.histories;
  else if(request.action==='auto'){
   h.context.chrome.tabs={query:async()=>[{id:1,url:sender.url}]};
-  h.context.chrome.scripting={executeScript:async options=>{context.planArg=options.args[0];return [{result:vm.runInContext('window.__tredMarketScanner.plan(planArg)',context)}];}};
+  h.context.chrome.scripting={executeScript:async options=>{context.planArgs=options.args;return [{result:vm.runInContext('('+options.func.toString()+')(...planArgs)',context)}];}};
   await vm.runInContext('TredScan.sync(post,endpoint)',h.context);
  }
  else if(request.action==='tick'){const work=timers;timers=[];for(const fn of work)fn();await Promise.all(responses);responses=[];if(socket.subscribed.size)await socket.emit('42'+JSON.stringify(['updateStream',[...socket.subscribed].map(s=>[s,h.context.Date.now()/1000+7200,106.30])]));}

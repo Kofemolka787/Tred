@@ -11,7 +11,7 @@ const asset={type:"asset",symbol:"EURUSD",market:"normal",is_open:true,payout:.8
 const quote={type:"quote",symbol:"EURUSD",price:1.1,time:now};
 function harness(fetcher,initial={},liveClock=false){
   const storage={base,token,...initial},requests=[];let listener,clockMillis=now*1000;
-  const context={URL,Date:class extends Date{static now(){return liveClock?Date.now():clockMillis;}},AbortSignal,console,setTimeout:()=>1,
+  const context={URL,Date:class extends Date{static now(){return liveClock?Date.now():clockMillis;}},AbortSignal,console,setTimeout:()=>1,clearTimeout:()=>{},
     chrome:{storage:{local:{setAccessLevel:()=>{},get:async keys=>Object.fromEntries(keys.map(k=>[k,storage[k]])),set:async value=>Object.assign(storage,value),clear:async()=>{for(const k in storage)delete storage[k];}}},runtime:{onMessage:{addListener:fn=>listener=fn}}},
     fetch:async(url,options)=>{requests.push({url,options,body:JSON.parse(options.body)});return fetcher?fetcher(url,options):response(200,{ok:true});}
   };
@@ -29,7 +29,7 @@ async function checks(){
   assert.equal(h.requests[2].body.events[0].time,now,"No timestamp rewriting");
   let status=await h.message({action:"status"});
   assert(status.paired&&!status.needsPairing&&status.lastSeen);
-  assert.equal(status.worker_version,"0.3.13");
+  assert.equal(status.worker_version,"0.3.14");
   assert.match(status.diagnostic,/quote|Котировка/);assert.match(status.diagnostic,/30 с/);
   assert(!JSON.stringify(status).includes(token));
   assert(!JSON.stringify(h.storage).includes('"balance"'));
@@ -305,7 +305,33 @@ async function checks(){
   const burstDelivered=burst.requests.flatMap(r=>r.body.events).filter(e=>e.type==='quote');
   assert.equal(burstDelivered.length,1,'A quote burst delivers the latest actual sample rather than an old backlog');
   assert.equal(burstDelivered[0].time,ticks.at(-1).time);assert.equal(burstDelivered[0].price,ticks.at(-1).price);
-  console.log(JSON.stringify({ok:true,live_data_prioritized_over_large_histories:true,worker_scenarios:54,closed_feed_cancels_pending_catalog:true,utc_timestamps_unchanged:true,bad_quote_does_not_block_account:true,failed_claim_preserves_binding:true,status_excludes_token:true,unknown_credential_fields_not_sent:true,late_response_after_disconnect_ignored:true,html_and_missing_token_keep_binding:true,explicit_po_utc2_profile:true,stale_and_future_still_rejected:true,closed_candles_decoded_before_filter:true,source_time_provenance_retained:true,no_arrival_time_calibration:true,usd_requires_confirmation_when_missing:true,confirmation_scoped_to_account_and_mode:true,explicit_other_currency_cannot_be_overridden:true,currency_confirmation_does_not_replay_balance:true,manual_profile_scoped_to_mode_and_known_source:true,fresh_pending_balance_keeps_original_time:true,pending_balance_not_persisted:true,broker_identity_not_overridden:true,unknown_id_requires_explicit_scoped_confirmation:true,schema_diagnostics_exclude_raw_ids:true,zero_id_rejected:true,balance_changes_without_reconfirmation:true,profile_survives_reconnect_and_restart:true,legacy_confirmation_migrated:true,different_source_requires_confirmation:true,delivery_retry_without_freshening:true,synchronous_context_invalidation_handled:true,collector_restored_without_page_reload:true,visible_balance_uses_configured_account:true}));
+  const damaged=harness();
+  const wellFormed={type:'candle',symbol:'EURUSD',period:60,time:Math.floor(now/60)*60-60,open:1.1,high:1.2,low:1,close:1.15};
+  await damaged.events([wellFormed,{...wellFormed,low:9},{...wellFormed,time:wellFormed.time+2},{...wellFormed,period:5},{...wellFormed,origin:'invented'},quote]);
+  assert.equal(damaged.requests.flatMap(r=>r.body.events).filter(e=>e.type==='candle').length,1);
+  assert(damaged.storage.receivedKinds.includes('candle')&&damaged.storage.receivedKinds.includes('quote'));
+  assert.match(damaged.storage.timeWarnings.candle,/OHLC/);
+  const draining=harness(),delays=[];
+  draining.context.setTimeout=(fn,ms)=>{delays.push(ms);return 1;};
+  for(let batch=0;batch<2;batch++)await draining.message({action:'events',events:Array.from({length:250},(_,i)=>({...wellFormed,time:wellFormed.time-(batch*250+i)*60}))},sender);
+  await vm.runInContext('flush()',draining.context);
+  assert.equal(delays.at(-1),50,'Backlogged bars do not wait a full second between each 250 rows');
+  assert.equal(vm.runInContext('queue.length',draining.context),250);
+  await vm.runInContext('flush()',draining.context);
+  assert.equal(draining.requests.flatMap(r=>r.body.events).length,500);
+  let historyAttempts=0;
+  const recovery=harness(()=>++historyAttempts===1?response(503,{message:'Temporary fixture tunnel failure'}):response(200,{ok:true}),{marketClock:'po-utc2'});
+  const sourceBar={...wellFormed,time:wellFormed.time+7200,source_clock:'po-market-native-v1'};
+  await recovery.events([sourceBar]);
+  assert.equal(vm.runInContext('queue.length',recovery.context),1);
+  recovery.advance(2);await vm.runInContext('flush()',recovery.context);
+  assert.equal(recovery.requests.length,2);assert.equal(recovery.requests[1].body.events[0].time,wellFormed.time);
+  assert.equal(vm.runInContext('queue.length',recovery.context),0);
+  const bounded=harness(()=>response(503,{message:'Temporary fixture tunnel failure'}));
+  await bounded.events([wellFormed]);
+  for(let i=0;i<7;i++){bounded.advance(2);await vm.runInContext('flush()',bounded.context);}
+  assert.equal(bounded.requests.length,4,'A failing market event gets at most three delivery retries');
+  console.log(JSON.stringify({ok:true,live_data_prioritized_over_large_histories:true,worker_scenarios:58,bad_bar_does_not_block_good_history:true,history_backlog_drains_promptly:true,transient_history_retry_retains_time:true,delivery_retries_bounded:true,closed_feed_cancels_pending_catalog:true,utc_timestamps_unchanged:true,bad_quote_does_not_block_account:true,failed_claim_preserves_binding:true,status_excludes_token:true,unknown_credential_fields_not_sent:true,late_response_after_disconnect_ignored:true,html_and_missing_token_keep_binding:true,explicit_po_utc2_profile:true,stale_and_future_still_rejected:true,closed_candles_decoded_before_filter:true,source_time_provenance_retained:true,no_arrival_time_calibration:true,usd_requires_confirmation_when_missing:true,confirmation_scoped_to_account_and_mode:true,explicit_other_currency_cannot_be_overridden:true,currency_confirmation_does_not_replay_balance:true,manual_profile_scoped_to_mode_and_known_source:true,fresh_pending_balance_keeps_original_time:true,pending_balance_not_persisted:true,broker_identity_not_overridden:true,unknown_id_requires_explicit_scoped_confirmation:true,schema_diagnostics_exclude_raw_ids:true,zero_id_rejected:true,balance_changes_without_reconfirmation:true,profile_survives_reconnect_and_restart:true,legacy_confirmation_migrated:true,different_source_requires_confirmation:true,delivery_retry_without_freshening:true,synchronous_context_invalidation_handled:true,collector_restored_without_page_reload:true,visible_balance_uses_configured_account:true}));
 }
 async function realHttp(){
   const api=process.argv[process.argv.indexOf("--api")+1],fixtureToken=process.argv[process.argv.indexOf("--fixture-token")+1];

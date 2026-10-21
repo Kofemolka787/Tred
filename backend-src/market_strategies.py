@@ -31,6 +31,19 @@ def valid_bar(row):
             and row["low"] <= min(row["open"], row["close"]) and row["high"] >= max(row["open"], row["close"]))
 
 
+def closed_tail(rows, period, now, limit=160):
+    """Use the latest continuous closed run; never bridge a missing interval.
+
+    A gap before 80 good recent bars must not invalidate those recent bars.
+    A gap inside the required run still leaves fewer than 80 usable bars.
+    """
+    rows = sorted((r for r in rows if r["time"]+period <= now), key=lambda r:r["time"])[-limit:]
+    for i in range(len(rows)-1, 0, -1):
+        if abs(rows[i]["time"]-rows[i-1]["time"]-period) > 1:
+            return rows[i:]
+    return rows
+
+
 def ema(values, length):
     result = [None] * len(values)
     if len(values) < length:
@@ -75,7 +88,7 @@ def levels(rows, atr):
 
 
 def frame(rows, period, now):
-    rows = sorted((r for r in rows if r["time"]+period <= now), key=lambda r: r["time"])[-160:]
+    rows = closed_tail(rows, period, now)
     if len(rows) < 80 or now-(rows[-1]["time"]+period) > period+10:
         return None
     if any(abs(b["time"]-a["time"]-period) > 1 for a, b in zip(rows, rows[1:])):

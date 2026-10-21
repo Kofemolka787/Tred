@@ -51,4 +51,16 @@ tick();assert.equal(sent.length,beforeWrong+1,'A response without index but veri
 const next=sent.at(-1)[1];scanner.received(third,{asset:next.asset,index:String(next.index)},next.period);
 tick();
 scanner.close(third.feed);scanner.stop();
-console.log(JSON.stringify({ok:true,pacing_and_history_concurrency:true,unvisited_pairs_not_starved:true,unindexed_verified_period_frees_slot:true,one_pending_request_per_instrument:true,closed_unknown_sockets_do_not_send:true,only_read_only_market_requests:true,native_clock_request_boundaries:true}));
+sent=[];timers=[];
+const fourth={feed:'44444444-4444-4444-8444-444444444444',catalog:new Map(['AAA','CCC','DDD'].map(s=>[s,{is_open:true}])),requests:new Map()};
+scanner.attach({readyState:1},fourth,frame=>sent.push(JSON.parse(frame.slice(2))));
+scanner.plan({...plan,until:now/1000+15,pairs:['AAA','CCC','DDD'].map(symbol=>({symbol,feed_id:fourth.feed,quote:false,history:[{period:60,bars:160}]}))});
+now+=400;scanner.wake();assert.equal(sent.length,1);
+for(let i=0;i<1000;i++)scanner.wake();
+assert.equal(sent.length,1,'An incoming-message burst cannot multiply the request budget');
+now+=399;scanner.wake();assert.equal(sent.length,1);
+now+=1;scanner.wake();assert.equal(sent.length,2);
+const due=timers;timers=[];for(const fn of due)fn();
+assert.equal(sent.length,2,'Timer and message wakes share one pacing guard');
+scanner.close(fourth.feed);scanner.stop();
+console.log(JSON.stringify({ok:true,pacing_and_history_concurrency:true,native_message_and_timer_shared_pacing:true,unvisited_pairs_not_starved:true,unindexed_verified_period_frees_slot:true,one_pending_request_per_instrument:true,closed_unknown_sockets_do_not_send:true,only_read_only_market_requests:true,native_clock_request_boundaries:true}));

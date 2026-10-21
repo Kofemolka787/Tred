@@ -1,6 +1,6 @@
 "use strict";
 importScripts("time-check.js","account-check.js","scan-worker.js");
-const WORKER_VERSION="0.3.13";
+const WORKER_VERSION="0.3.14";
 const endpoint=value=>{
   const u=new URL(value);
   if(u.protocol!=="https:"||!/^[a-z0-9-]+\.trycloudflare\.com$/.test(u.hostname)||u.port||u.username||u.password||u.search||u.hash||u.pathname!=="/")throw new Error("Укажи HTTPS-адрес своего TRED-туннеля.");
@@ -17,7 +17,7 @@ async function post(base,path,body,token){
   return result;
 }
 chrome.storage.local.setAccessLevel({accessLevel:"TRUSTED_CONTEXTS"});
-const eventFields={account:["type","mode","account_id","currency","balance","time","source_stream","id_status","id_shape","source_account","account_source"],asset:["type","symbol","market","is_open","payout","expiries","time","feed_id"],quote:["type","symbol","price","time","source_clock","feed_id"],candle:["type","symbol","period","time","open","high","low","close","source_clock","origin"],feed:["type","feed_id","connected","time"],history_status:["type","symbol","event","period","rows","bars","code","time"],trade:["type","mode","account_id","id","symbol","direction","stake","opened_at","expires_at","closed_at","pnl","status","time"]};
+const eventFields={account:["type","mode","account_id","currency","balance","time","source_stream","id_status","id_shape","source_account","account_source"],asset:["type","symbol","market","is_open","payout","expiries","time","feed_id","history_scoped"],quote:["type","symbol","price","time","source_clock","feed_id"],candle:["type","symbol","period","time","open","high","low","close","source_clock","origin","feed_id"],feed:["type","feed_id","connected","time"],history_status:["type","symbol","event","period","rows","bars","code","time"],trade:["type","mode","account_id","id","symbol","direction","stake","opened_at","expires_at","closed_at","pnl","status","time"]};
 let queue=[],sending=false,timer,generation=0;
 // Large candle histories must not delay or evict live balance/price changes.
 const priority=event=>({account:0,feed:0,trade:1,asset:2,quote:3,candle:4}[event?.type]??5);
@@ -49,18 +49,21 @@ const pendingAccounts=new Map();
 const streamTabs=new Map();
 const tabAccounts=new Map();
 const retryAccounts=new Map();
+const deliveryRetries=new WeakMap();
 const fromPocket=sender=>sender.tab&&/^https:\/\/([a-z0-9-]+\.)*pocketoption\.com\//.test(sender.url||"");
 function prunePending(){
   const now=Date.now()/1000;
   for(const [key,event] of pendingAccounts)if(now-event.time>60||event.time>now+5)pendingAccounts.delete(key);
   while(pendingAccounts.size>20)pendingAccounts.delete(pendingAccounts.keys().next().value);
 }
-// One flush/second, at most six type-specific requests.
-function schedule(){if(!timer)timer=setTimeout(()=>{timer=null;flush();},1000);}
+// Coalesce small live bursts; drain a history backlog without adding a whole
+// second between every 250 bars. Never run two deliveries simultaneously.
+function schedule(delay=1000){if(!timer&&!sending)timer=setTimeout(()=>{timer=null;flush();},delay);}
 async function flush(){
   if(sending||!queue.length)return;
+  if(timer){clearTimeout(timer);timer=null;}
   sending=true;
-  const epoch=generation;
+  const epoch=generation;let backlogDelay=50;
   try{
     const stored=await chrome.storage.local.get(["base","token","needsPairing","timeWarnings","receivedKinds","marketClock","clockSamples","accountCandidate","confirmedUsdAccounts","identityCandidate","manualIdentities","accountProfiles","lastBalance"]);
     const {base,token}=stored;
@@ -84,7 +87,7 @@ async function flush(){
     for(const kind of [...TredTime.kinds,"unknown"]){
       const rows=groups.get(kind);
       if(!rows||epoch!==generation)continue;
-      const accepted=[],rejected=[],consumed=[],accountSources=new Map();let sourceSample;
+      const accepted=[],originals=[],rejected=[],consumed=[],accountSources=new Map();let sourceSample;
       for(const event of rows){
         const safe=eventFields[kind]&&Object.keys(event||{}).every(key=>eventFields[kind].includes(key));
         if(!safe){rejected.push({message:TredTime.labels[kind]+": неподдерживаемые поля. Событие не передано."});continue;}
@@ -106,8 +109,15 @@ async function flush(){
         }
         // The terminal includes the current, unfinished candle in its history.
         // Never send it to research, including after UTC+2 source decoding.
-        if(kind==="candle"&&[60,120,300,600,900].includes(decoded.event.period)&&decoded.event.time+decoded.event.period>now)continue;
+        if(kind==="candle"){
+          const c=decoded.event;
+          if(![60,120,300,600,900].includes(c.period)||![c.open,c.high,c.low,c.close].every(v=>typeof v==="number"&&Number.isFinite(v)&&v>0&&v<=1e9)||c.low>Math.min(c.open,c.close)||c.high<Math.max(c.open,c.close)||c.time%c.period>1||c.origin!==undefined&&!["broker","ticks"].includes(c.origin)){
+            rejected.push({message:"Свеча: неверный OHLC, период или начало интервала. Остальные корректные свечи передаются."});continue;
+          }
+          if(c.time+c.period>now)continue;
+        }
         accepted.push(decoded.event);
+        originals.push(event);
         if(kind==="account")accountSources.set(TredAccount.key(decoded.event),event);
         if(decoded.source)sourceSample=decoded.source;
       }
@@ -124,16 +134,25 @@ async function flush(){
         if(!rejected.length)delete warnings[kind];
       }catch(error){
         if(epoch!==generation)return;
-        lastError=error.message.slice(0,200);
+        backlogDelay=1000;
+        lastError=error.status===400&&error.message==="Пакет содержит неподдерживаемые поля."?"Сервер не поддерживает данные модуля. Обнови весь пакет TRED 0.3.24 и перезапусти сервер.":error.message.slice(0,200);
         if(kind==="account"&&(!error.status||error.status===429||error.status>=500))for(const event of accepted)retryAccounts.set(TredAccount.key(event),accountSources.get(TredAccount.key(event)));
+        if(kind!=="account"&&(!error.status||error.status===429||error.status>=500)){
+          // Keep the original source event, including its clock tag and time.
+          // A transient tunnel error must not throw away a whole history. The
+          // retry is bounded; normal freshness validation still runs each time.
+          for(const event of originals){const n=deliveryRetries.get(event)||0;if(n<3){deliveryRetries.set(event,n+1);queue.push(event);}}
+          boundQueue();backlogDelay=2000;
+        }
         if(error.status===401){needsPairing=true;break;}
         if(lastError==="Некорректное время данных."||lastError==="Получены устаревшие данные.")warnings[kind]=TredTime.rejectedByServer(kind,accepted,Date.now()/1000);
       }
     }
     if(epoch===generation)await chrome.storage.local.set({lastError,needsPairing,timeWarnings:warnings,receivedKinds:[...received],clockSamples,accountCandidate,identityCandidate,accountProfiles,lastBalance,...(lastSeen===null?{}:{lastSeen})});
   }catch(error){
+    backlogDelay=1000;
     if(epoch===generation)await chrome.storage.local.set({lastError:error.message.slice(0,200)});
-  }finally{sending=false;if(queue.length)schedule();}
+  }finally{sending=false;if(queue.length)schedule(backlogDelay);}
 }
 chrome.runtime.onMessage.addListener((message,sender,reply)=>{
   (async()=>{
@@ -212,7 +231,7 @@ chrome.runtime.onMessage.addListener((message,sender,reply)=>{
       const diagnostic=Object.entries(timeWarnings||{}).filter(([kind,value])=>TredTime.kinds.includes(kind)&&typeof value==="string").map(([,value])=>value).join("\n");
       const identityNeedsTab=!!identityCandidate&&identityCandidate.tab_id!==message.active_tab_id;
       if(base&&token&&(!relayLastSeen||Date.now()-relayLastSeen>20000))await attachOpenTerminals();
-      return {worker_version:WORKER_VERSION,autoRefreshSeconds:5,lastBalance,relayLastSeen,terminalCode,base,paired:!!(base&&token),needsPairing:!!needsPairing,lastError,lastSeen,diagnostic,receivedKinds:(receivedKinds||[]).filter(x=>TredTime.kinds.includes(x)),marketClock:TredTime.profile(marketClock),clockSamples:clockSamples||{},accountCandidate:accountCandidate||null,usdConfirmed:!!(accountCandidate&&TredAccount.confirmations(confirmedUsdAccounts).includes(TredAccount.key(accountCandidate))),identityCandidate:identityNeedsTab?null:identityCandidate||null,identityNeedsTab,lastManualAccountId:TredAccount.id(lastManualAccountId)?lastManualAccountId:""};
+      return {worker_version:WORKER_VERSION,scannerStatus:await TredScan.status(),autoRefreshSeconds:5,lastBalance,relayLastSeen,terminalCode,base,paired:!!(base&&token),needsPairing:!!needsPairing,lastError,lastSeen,diagnostic,receivedKinds:(receivedKinds||[]).filter(x=>TredTime.kinds.includes(x)),marketClock:TredTime.profile(marketClock),clockSamples:clockSamples||{},accountCandidate:accountCandidate||null,usdConfirmed:!!(accountCandidate&&TredAccount.confirmations(confirmedUsdAccounts).includes(TredAccount.key(accountCandidate))),identityCandidate:identityNeedsTab?null:identityCandidate||null,identityNeedsTab,lastManualAccountId:TredAccount.id(lastManualAccountId)?lastManualAccountId:""};
     }
     if(message.action==="terminal-balance"&&fromPocket(sender)){
       const epoch=generation;
@@ -258,7 +277,10 @@ chrome.runtime.onMessage.addListener((message,sender,reply)=>{
       // first by the priority queue. Other sockets and balances stay intact.
       const closed=new Set(events.filter(e=>e?.type==="feed"&&e.connected===false&&typeof e.feed_id==="string").map(e=>e.feed_id));
       if(closed.size)queue=queue.filter(e=>!["asset","quote"].includes(e?.type)||!closed.has(e.feed_id));
-      boundQueue();schedule();return {ok:true};
+      boundQueue();schedule();
+      // Do not rely only on the relay's page timer to renew the 15s plan.
+      // Native events wake MV3 workers; sync itself is bounded to once per 4s.
+      await TredScan.sync(post,endpoint);return {ok:true};
     }
     throw new Error("Действие недоступно.");
   })().then(reply).catch(error=>reply({error:error.message}));

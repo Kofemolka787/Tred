@@ -3,11 +3,14 @@
 All broker messages and model decisions are fixtures. No external credentials.
 """
 from http.server import ThreadingHTTPServer
+import argparse
 import json
 from pathlib import Path
 import subprocess
 import tempfile
 import threading
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from backend import handler
 from test_market_analysis import fixture
@@ -15,7 +18,13 @@ from test_support import FixtureAI
 from trading_core import Ledger
 
 ROOT=Path(__file__).resolve().parent
-with tempfile.TemporaryDirectory(prefix='tred-fast-') as temporary:
+parser=argparse.ArgumentParser()
+parser.add_argument('--no-tab-timers',action='store_true')
+args=parser.parse_args()
+# Keep the API's real rolling rate limit, on the same accelerated clock as
+# browser and ledger. Otherwise 100 simulated seconds fit inside one wall minute.
+with tempfile.TemporaryDirectory(prefix='tred-fast-') as temporary, patch(
+        'backend.time', SimpleNamespace(monotonic=lambda:current[0])):
     current=[1800000000.0]
     ai=FixtureAI()
     ledger=Ledger(Path(temporary)/'ledger.sqlite3',clock=lambda:current[0],ai=ai)
@@ -46,8 +55,14 @@ with tempfile.TemporaryDirectory(prefix='tred-fast-') as temporary:
         job=ledger.start_scan(101);command({'action':'auto'})
         samples=[]
         for i in range(250):
-            current[0]+=.4;command({'action':'advance','seconds':.4});command({'action':'tick'})
-            if i%10==9:command({'action':'auto'})
+            current[0]+=.4;command({'action':'advance','seconds':.4})
+            if args.no_tab_timers:
+                # Actual observer callbacks, but never run the page timeout or
+                # relay heartbeat. Only one visible instrument streams itself.
+                frame('updateStream',[['PAIR0_otc',current[0]+7200,106.30]])
+            else:
+                command({'action':'tick'})
+                if i%10==9:command({'action':'auto'})
             if i%25==24:
                 feed=ledger.state({'id':101})['feed']
                 samples.append({'seconds':round(current[0]-1800000000),'histories':sum(p['history_ready'] for p in feed['pairs']),'quotes':feed['quoted'],'ready':feed['ready']})
@@ -68,9 +83,10 @@ with tempfile.TemporaryDirectory(prefix='tred-fast-') as temporary:
         report={'ok':True,'cold_catalog_pairs':41,'both_periods_received_for_all_41':True,
                 'fast_responses_without_index_or_period':True,'all_stream_subscriptions_silent':True,
                 'genuine_timestamped_tick_probes_only':True,'samples':samples,'read_only_market_requests':True,
-                'balance_unchanged':True,'other_user_isolated':True,'real_broker_verified':False}
+                'balance_unchanged':True,'other_user_isolated':True,'real_broker_verified':False,
+                'tab_timers_disabled':args.no_tab_timers,'plan_renewed_by_native_messages':args.no_tab_timers}
         (ROOT/'artifacts').mkdir(exist_ok=True)
-        (ROOT/'artifacts/fast-collection-check.json').write_text(json.dumps(report,indent=2)+'\n')
+        (ROOT/'artifacts'/('background-collection-check.json' if args.no_tab_timers else 'fast-collection-check.json')).write_text(json.dumps(report,indent=2)+'\n')
         print(json.dumps(report))
     finally:
         child.stdin.close()

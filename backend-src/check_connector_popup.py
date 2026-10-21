@@ -24,12 +24,12 @@ try:
             page=browser.new_page(viewport={"width":340,"height":820});errors=[]
             page.on("pageerror",lambda error:errors.append(str(error)))
             page.add_init_script("""
-              window.fixture={worker_version:'0.3.13',base:'https://fixture-route.trycloudflare.com',paired:true,needsPairing:false,lastError:'',diagnostic:'Котировка · time: опережает часы браузера примерно на 7200 с. Событие не передано.',receivedKinds:['asset'],marketClock:'utc'};
+              window.fixture={worker_version:'0.3.14',base:'https://fixture-route.trycloudflare.com',paired:true,needsPairing:false,lastError:'',diagnostic:'Котировка · time: опережает часы браузера примерно на 7200 с. Событие не передано.',receivedKinds:['asset'],marketClock:'utc'};
               window.reloaded=0;
               window.fixtureTabId=1;window.idConfirmations=0;
               window.chrome={tabs:{query:async()=>[{id:window.fixtureTabId}]},runtime:{sendMessage:async message=>{
                 if(message.action==='status')return structuredClone(window.fixture);
-                if(message.action==='disconnect'){window.fixture={worker_version:'0.3.13',paired:false,lastError:'Старая ошибка'};return {ok:true};}
+                if(message.action==='disconnect'){window.fixture={worker_version:'0.3.14',paired:false,lastError:'Старая ошибка'};return {ok:true};}
                 if(message.action==='market-clock'){window.fixture.marketClock=message.profile;window.fixture.diagnostic='';return {ok:true};}
                 if(message.action==='confirm-usd'){if(message.account_id!==window.fixture.accountCandidate.account_id||message.mode!==window.fixture.accountCandidate.mode)throw Error('Wrong account');window.fixture.usdConfirmed=true;return {ok:true};}
                 if(message.action==='forget-account-id'){window.fixture.accountCandidate=null;return {ok:true};}
@@ -50,6 +50,13 @@ try:
             assert page.locator("#diagnostic").is_visible()
             assert '7200 с' in page.locator("#diagnostic").inner_text()
             assert 'каталог пар' in page.locator("#received").inner_text()
+            page.evaluate("window.fixture.scannerStatus={code:'ready',pairs:21,updated_at:Date.now()}")
+            page.locator('#market-delivery').filter(has_text='заданий для пар 21').wait_for()
+            assert 'не число готовых графиков' in page.locator('#market-delivery').inner_text()
+            page.evaluate("window.fixture.scannerStatus.updated_at=Date.now()-21000")
+            page.locator('#market-delivery').filter(has_text='давно не отвечал').wait_for()
+            page.evaluate("window.fixture.scannerStatus={code:'no_socket',pairs:0,updated_at:Date.now()}")
+            page.locator('#market-delivery').filter(has_text='канал пока не найден').wait_for()
             assert 'без пересчёта' in page.locator('#clock-status').inner_text()
             page.locator('#clock-toggle').click()
             page.locator('#clock-status').filter(has_text='UTC+2 → UTC').wait_for()
@@ -117,6 +124,7 @@ try:
             page.locator('#reload-module').wait_for()
             assert not page.locator('#form').is_visible()
             assert not page.locator('#market-time').is_visible()
+            assert not page.locator('#market-delivery').is_visible()
             assert 'Модуль ещё не связан' not in page.locator('#connection').inner_text()
             page.locator('#reload-module').click();assert page.evaluate('window.reloaded')==1
             assert not errors,errors

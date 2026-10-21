@@ -5,8 +5,9 @@ Only completed, contiguous bars and already-confirmed pivots are considered.
 """
 import math
 import json
-from market_feed import gate
-from market_strategies import STRATEGIES, evaluate, valid_bar, price_allows
+import hashlib
+from market_feed import gate, catalog_observed
+from market_strategies import STRATEGIES, evaluate, valid_bar, price_allows, closed_tail
 
 
 PERIODS = {5: (60, 300), 10: (60, 300), 15: (300, 900)}
@@ -14,6 +15,23 @@ PERIODS = {5: (60, 300), 10: (60, 300), 15: (300, 900)}
 
 def finite(value):
     return type(value) in (int, float) and math.isfinite(value)
+
+
+def setup_id(candidate):
+    anchor={k:candidate[k] for k in ('strategy','direction','zones','events','invalidation')}
+    # A zone-based SMC reaction may remain valid after another bar closes.
+    # One-candle strategies and channel-only reactions belong to that exact bar.
+    if candidate['strategy']!='smart_money' or not candidate['zones']:
+        anchor['bar_time']=candidate['bar_time']
+    return hashlib.sha256(json.dumps(anchor,sort_keys=True,separators=(',',':'),allow_nan=False).encode()).hexdigest()
+
+
+def same_setup(current, previous):
+    if (current['symbol'],current['direction'],current.get('strategy'),current['timeframes'])!=(previous['symbol'],previous['direction'],previous.get('strategy'),previous['timeframes']):
+        return False
+    if previous.get('setup_id'):
+        return current.get('setup_id')==previous['setup_id']
+    return current['bar_time']==previous['bar_time'] and current['context_bar_time']==previous['context_bar_time']
 
 
 def aggregate(rows, source, target, now):
@@ -37,6 +55,9 @@ def aggregate(rows, source, target, now):
 
 
 def history(histories, pair, period, now):
+    native=closed_tail(histories.get((pair,period),[]),period,now)
+    if len(native)>=80 and now-(native[-1]["time"]+period)<=period+10 and all(valid_bar(r) for r in native):
+        return native
     merged={}
     for source in (60,120,300,600):
         if source < period and period % source == 0:
@@ -52,7 +73,7 @@ def frame_data(histories,pair,expiry,now):
     plans=list(dict.fromkeys((preferred,(120,600),(60,300),(300,900))))
     fallback=None
     for plan in plans:
-        bars=[history(histories,pair,p,now) for p in plan]
+        bars=[closed_tail(history(histories,pair,p,now),p,now) for p in plan]
         checks=[analyze(r,p,now) for r,p in zip(bars,plan)]
         result=(plan,bars,checks)
         if all(a.get("history_ready") for a in checks):
@@ -63,7 +84,7 @@ def frame_data(histories,pair,expiry,now):
 
 
 def analyze(candles, period, now):
-    rows = sorted((r for r in candles if r["time"] + period <= now), key=lambda r: r["time"])[-160:]
+    rows = closed_tail(candles, period, now)
     if len(rows) < 80:
         return {"status": "skipped", "reason": f"Нужно 80 закрытых свечей M{period//60}; получено {len(rows)}.", "bars": len(rows)}
     if any(not all(finite(r[k]) and 0 < r[k] <= 1e9 for k in ("open", "high", "low", "close")) or r["low"] > min(r["open"], r["close"]) or r["high"] < max(r["open"], r["close"]) for r in rows):
@@ -170,7 +191,7 @@ def analyze(candles, period, now):
             "reason": "Структура и реакция на зону согласованы." if qualified else "Структура видна, но нет свежей реакции на зону; ждём подтверждение."}
 
 
-def rank(assets, histories, *, expiry, market, symbol, allow_otc, now, min_payout=.85):
+def rank(assets, histories, *, expiry, market, symbol, allow_otc, now, min_payout=.85, research=False):
     results, rejected = [], []
     periods = PERIODS.get(expiry, (300, 900) if expiry >= 15 else (60, 300))
     def normalize(s):
@@ -183,7 +204,8 @@ def rank(assets, histories, *, expiry, market, symbol, allow_otc, now, min_payou
             rejected.append((0,"Разреши OTC в настройках анализа или выбери вкладку OTC."))
             continue
         status=gate(asset,expiry=expiry,min_payout=min_payout,now=now)
-        if status["code"] != "ready":
+        entry_ready=status['code']=='ready'
+        if not entry_ready and not (research and status['metadata_eligible'] and catalog_observed(asset,now)):
             priority={"closed":0,"payout":1,"expiry":2,"catalog":3,"quote":4}[status["code"]]
             rejected.append((priority,status["reason"]))
             continue
@@ -192,17 +214,20 @@ def rank(assets, histories, *, expiry, market, symbol, allow_otc, now, min_payou
         if not setups:
             rejected.append((6 if all(a.get("history_ready") for a in analyses) else 5, reason))
         for first in setups:
-            price = asset["price"]
-            if not price_allows(first, price):
+            price = asset.get("price")
+            if entry_ready and not price_allows(first, price):
                 rejected.append((7,"Цена уже ушла от зоны или нарушила условие сценария. Вход пропущен."))
                 continue
             results.append({"symbol": asset["symbol"], "market": asset["market"], "direction": first["direction"],
+                            "setup_id":setup_id(first),
+                            "entry_ready":entry_ready,"reference_price":first['close'],"reference_source":"closed_bar",
                             "strategy": first["strategy"], "strategy_name": first["strategy_name"], "strategy_risk": first["strategy_risk"],
                             "score": first["score"], "evidence": [*first["evidence"], *([f"Старший M{periods[1]//60} подтверждает направление структуры."] if first["strategy"] == "smart_money" else [])],
                             "timeframes": list(periods), "payout": asset["payout"], "price": price,
                             "quote_time": asset["quote_time"], "zones": first["zones"], "events": first["events"],
                             "channel": first["channel"], "invalidation": first["invalidation"], "atr": first["atr"],
-                            "entry_low": price-.35*first["atr"], "entry_high": price+.35*first["atr"],
+                            "entry_low": (price if entry_ready else first['close'])-(.35 if entry_ready else .5)*first["atr"],
+                            "entry_high": (price if entry_ready else first['close'])+(.35 if entry_ready else .5)*first["atr"],
                             "catalog_age": status["catalog_age"], "catalog_source": status["catalog_source"],
                             "bar_time": first["bar_time"], "context_bar_time": frames[1]["bar_time"], "candles": frames[0]["rows"][-60:]})
     return sorted(results, key=lambda x: (x["payout"] < .92, -x["score"], -x["payout"], x["symbol"], x["strategy"])), [reason for _,reason in sorted(rejected,key=lambda r:-r[0])]
@@ -222,6 +247,7 @@ def coverage(assets, histories, *, market, expiry, min_payout, now):
         if setups and not current:
             strategy_reason = "Сценарий найден, но цена уже ушла от зоны или нарушила условие отмены."
         rows.append({"symbol": asset["symbol"], "payout": asset["payout"], "eligible": eligible, "metadata_eligible":status["metadata_eligible"],
+                     "analysis_ready":bool(status['metadata_eligible'] and catalog_observed(asset,now) and all(a.get('history_ready') for a in checks)),
                      "quote_live": quote_live, "price": asset.get("price"), "quote_time": asset.get("quote_time"), "timeframes":list(selected), "tick_bars":[sum(r.get("origin")=="ticks" for r in rows) for rows in bars], "bars": [len(r) for r in bars],
                      "history_ready": all(a.get("history_ready") for a in checks),
                      "strategies": list(dict.fromkeys(s["strategy_name"] for s in current)),
@@ -233,4 +259,5 @@ def coverage(assets, histories, *, market, expiry, min_payout, now):
     stages={name:sum(r["stage"]==name for r in rows) for name in ("closed","payout","expiry","catalog","quote","history","structure")}
     return {"blocked":stages,"catalog": len(rows), "eligible": sum(r["eligible"] for r in rows), "metadata_eligible":sum(r["metadata_eligible"] for r in rows), "quoted": sum(r["quote_live"] for r in rows),
             "ready": sum(r["eligible"] and r["quote_live"] and r["history_ready"] for r in rows),
+            "analysis_ready":sum(r['analysis_ready'] for r in rows),
             "strategy_catalog": list(STRATEGIES), "timeframes": list(periods), "pairs": sorted(rows, key=lambda r: (-r["eligible"], -r["quote_live"], -r["payout"], r["symbol"]))}

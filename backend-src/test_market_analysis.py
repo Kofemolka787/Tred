@@ -40,6 +40,23 @@ class AnalysisTests(unittest.TestCase):
         for rows,now in ((fixture()[:79],1800000000),(fixture()[:-1],1800001000),(fixture()[:100]+fixture()[101:],1800000000)):
             self.assertEqual(analyze(rows,60,now)["status"],"skipped")
 
+    def test_old_gap_does_not_discard_a_complete_recent_run(self):
+        from market_strategies import frame
+        now=1800000000
+        rows=fixture()
+        old_gap=rows[:20]+rows[21:]
+        result=analyze(old_gap,60,now)
+        self.assertTrue(result.get('history_ready'),result)
+        features=frame(old_gap,60,now)
+        self.assertEqual(len(features['rows']),139)
+        self.assertEqual(features['rows'][0]['time'],rows[21]['time'])
+        recent_gap=rows[:100]+rows[101:]
+        self.assertFalse(analyze(recent_gap,60,now).get('history_ready'))
+        self.assertIsNone(frame(recent_gap,60,now))
+        damaged=[dict(r) for r in old_gap]
+        damaged[-1]['low']=1000
+        self.assertIsNone(frame(damaged,60,now),'A malformed recent bar is never skipped to make an entry')
+
     def test_multi_timeframe_alignment_and_live_asset_availability_are_required(self):
         now=1800000000
         a={"symbol":"EURUSD","market":"normal","is_open":True,"payout":.92,"updated_at":now,"quote_time":now,"price":106.30,"expiries":[5,15]}

@@ -40,10 +40,18 @@ class SignalSessions:
             price = asset["price"]
             if not signal["entry_low"] <= price <= signal["entry_high"] or (price <= signal["invalidation"] if signal["direction"] == "up" else price >= signal["invalidation"]):
                 raise DomainError("Цена вышла из зоны входа. Вход пропущен.", 409)
-            # Any completed bar arriving since the setup requires a new analysis.
+            # New bars must not silently replace the reviewed setup. A causal
+            # SMC zone can survive a bar close only after fresh full revalidation.
             latest = db.execute("SELECT max(time) FROM candles WHERE user_id=? AND symbol=? AND period=?", (uid, signal["symbol"], signal["timeframes"][0])).fetchone()[0]
             if latest is not None and latest > signal["bar_time"]:
-                raise DomainError("Закрылась новая свеча. Обнови анализ перед входом.", 409)
+                current=[]
+                if signal.get('ai') and signal.get('setup_id'):
+                    from market_analysis import rank, same_setup
+                    prefs,_,histories=self._market(db,uid)
+                    current,_=rank([{**dict(asset),'expiries':json.loads(asset['expiries'])}],histories,expiry=signal['expiry'],market=signal['market'],symbol=signal['symbol'],allow_otc=signal['market']=='otc',now=now,min_payout=signal.get('min_payout',.85))
+                    current=[c for c in current if same_setup(c,signal)]
+                if not current:
+                    raise DomainError("Закрылась новая свеча и прежний сценарий не подтверждён. Обнови анализ перед входом.", 409)
             entry = value.get("entry_price", price)
             if type(entry) not in (int, float) or not math.isfinite(entry) or entry <= 0 or not signal["entry_low"] <= entry <= signal["entry_high"]:
                 raise DomainError("Цена входа должна находиться в указанной зоне.")

@@ -39,7 +39,7 @@ class AIDecisionTests(unittest.TestCase):
         self.assertEqual(self.snapshot, before)
         self.assertEqual(self.payload['pairs'], self.snapshot['pairs'])
         stale = deepcopy(self.snapshot)
-        stale['pairs'].append({**stale['pairs'][0], 'symbol':'STALE_otc', 'data_ready':False})
+        stale['pairs'].append({**stale['pairs'][0], 'symbol':'STALE_otc', 'data_ready':False,'analysis_ready':False})
         prepared = prepare_payload(stale)
         self.assertFalse(any(r['symbol']=='STALE_otc' for r in prepared['evidence_refs']))
         self.assertEqual(len(prepared['pairs']), 2)
@@ -61,7 +61,7 @@ class AIDecisionTests(unittest.TestCase):
     def test_invented_cross_pair_stale_and_duplicate_refs_cannot_become_an_entry(self):
         wrong = deepcopy(self.wire); wrong['evidence'][0]['ref']='r999999'
         duplicate = deepcopy(self.wire); duplicate['evidence']=[duplicate['evidence'][0]]*2
-        stale = deepcopy(self.snapshot); stale['pairs'][0]['data_ready']=False
+        stale = deepcopy(self.snapshot); stale['pairs'][0].update(data_ready=False,analysis_ready=False)
         with self.assertRaises(DecisionError) as caught:
             validate(wire_decision(self.decision, self.snapshot), stale)
         self.assertEqual(caught.exception.code, 'decision_reference')
